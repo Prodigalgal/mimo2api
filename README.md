@@ -340,6 +340,24 @@ curl -X POST http://localhost:8080/v1/models/refresh \
   -H "Authorization: Bearer sk-mimo"
 ```
 
+### 8. Responses API
+
+OpenAI 最新 Responses API 格式，`/v1/responses` 端点：
+
+```bash
+curl http://localhost:8080/v1/responses \
+  -H "Authorization: Bearer sk-mimo" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "mimo-v2-pro",
+    "input": [
+      {"role": "user", "content": "你好"}
+    ]
+  }'
+```
+
+支持流式（`"stream": true`）、工具调用、深度思考、系统指令等，详见下方 [Responses API 详解](#responses-api-详解)。
+
 ## 工具调用详解
 
 MiMo API 本身**不支持** OpenAI function calling 格式。本代理通过**提示词注入 + 多策略提取**实现：
@@ -410,6 +428,7 @@ git clone -b no-tools https://github.com/Fly143/MiMo2API.git
 | 工具 prompt 注入 | ✅ 每次请求注入工具描述 | ❌ 不注入任何 prompt |
 | 工具提取解析 | ✅ 5 种策略提取 TOOL_CALL | ❌ 不解析 |
 | 响应清理 | ✅ 清理工具残留文本 | ❌ 不需要 |
+| Responses API | ✅ `/v1/responses`（含工具调用） | ✅ `/v1/responses`（纯对话） |
 | 多模态 | ✅ | ✅ |
 | 文件上传（.md/.txt） | ✅ | ✅ |
 | 深度思考 | ✅ | ✅ |
@@ -418,6 +437,100 @@ git clone -b no-tools https://github.com/Fly143/MiMo2API.git
 | TTS 语音合成 | ❌ 不包含 | ✅ `/v1/audio/speech` |
 
 **效果：** 上下文更干净，模型注意力完全集中在用户问题上，回答更专注、质量更高，代码也更简洁。对于大多数日常使用场景，无工具分支是更好的选择。
+
+## Responses API 详解
+
+端点：`POST /v1/responses`
+
+MiMo2API 完整实现了 OpenAI Responses API 格式，支持与 Chat Completions 相同的底层能力。
+
+### 与 Chat Completions 的区别
+
+| | Chat Completions | Responses API |
+|---|---|---|
+| 端点 | `/v1/chat/completions` | `/v1/responses` |
+| 消息字段 | `messages` | `input` |
+| 系统指令 | `messages[role=system]` | `instructions` |
+| 工具格式 | `tool.function.name` | `tool.name` |
+| 响应格式 | `choices[0].message` | `output[]` 数组 |
+| 思考内容 | `reasoning_content` | `output[type=reasoning]` |
+| 工具调用 | `message.tool_calls` | `output[type=function_call]` |
+
+### 基本用法
+
+```bash
+# 非流式
+curl http://localhost:8080/v1/responses \
+  -H "Authorization: Bearer sk-mimo" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "mimo-v2-pro",
+    "input": [{"role": "user", "content": "你好"}]
+  }'
+
+# 流式（SSE）
+curl http://localhost:8080/v1/responses \
+  -H "Authorization: Bearer sk-mimo" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "mimo-v2-pro",
+    "input": [{"role": "user", "content": "讲个故事"}],
+    "stream": true
+  }'
+```
+
+### 工具调用
+
+```bash
+curl http://localhost:8080/v1/responses \
+  -H "Authorization: Bearer sk-mimo" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "mimo-v2-pro",
+    "input": [{"role": "user", "content": "现在几点"}],
+    "tools": [{
+      "type": "function",
+      "name": "get_time",
+      "description": "获取当前时间",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "timezone": {"type": "string"}
+        }
+      }
+    }]
+  }'
+```
+
+> **注意工具格式：** Responses API 的 `tools` 没有 `function` 嵌套层，`name` 直接在顶层（不同于 Chat Completions 的 `tool.function.name`）。MiMo2API 兼容两种格式。
+
+### 响应格式
+
+```json
+{
+  "output": [
+    {
+      "type": "reasoning",
+      "summary": [{"type": "summary_text", "text": "模型思考内容..."}]
+    },
+    {
+      "type": "function_call",
+      "id": "fc_abc123...",
+      "call_id": "call_xyz789...",
+      "name": "get_time",
+      "arguments": "{}"
+    },
+    {
+      "type": "message",
+      "role": "assistant",
+      "status": "completed",
+      "content": [{"type": "output_text", "text": "现在是..."}]
+    }
+  ]
+}
+```
+
+`output` 按顺序包含：reasoning（如有）→ function_call（如有）→ message。
 
 ## 管理命令
 
@@ -522,7 +635,7 @@ pip install -r requirements.txt
 | Token 有效期 & 静默降级 | serviceToken 约 24 小时过期。过期后基础聊天（flash/pro）可能仍然正常，但 **mimo-v2.5 / mimo-v2-omni 多模态识图**会静默失效。管理面板"测试连接"只检查普通 chat 端点，无法发现此问题。修复需网页端退出并重新登录，见下方 FAQ |
 | 多模态模型 | `mimo-v2.5` / `mimo-v2-omni` 支持识图；全系模型支持文件上传与图片 OCR 文字提取 |
 | 并发限制 | 取决于 MiMo 服务端限制（通常 1-2 并发/账号），多账号可缓解 |
-| 不支持 Embeddings | 仅实现 Chat Completions 端点 |
+| 不支持 Embeddings | 仅实现 Chat Completions 和 Responses 端点 |
 | 非流式实际走 SSE | MiMo API 只提供 SSE 流，非流式请求会缓冲全部 SSE 后合并返回 |
 
 ## 常见问题
