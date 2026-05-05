@@ -1403,6 +1403,19 @@ async def _do_response_chat(body: dict, account) -> tuple:
     content = _strip_tool_result_blocks(content)
     content = _strip_citations(content)
 
+    # 额外处理：模型可能输出多个 think 块，_parse_think_tags 只剥除了第一个
+    remaining_thinks = []
+    cleaned_content = re.sub(
+        r'<think>(.*?)</think>',
+        lambda m: remaining_thinks.append(m.group(1)) or '',
+        content,
+        flags=re.DOTALL
+    )
+    if remaining_thinks:
+        content = cleaned_content.strip()
+        extra_think = '\n'.join(remaining_thinks)
+        think_content = (think_content + '\n' + extra_think).strip() if think_content else extra_think
+
     # 构建 items
     items = []
     has_thinking = False
