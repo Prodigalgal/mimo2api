@@ -105,7 +105,7 @@ def extract_medias_from_messages(messages: list) -> Tuple[str, list, list, list]
             text = _serialize_tool_calls(msg.tool_calls)
 
         if msg.role == "tool":
-            tool_call_id = getattr(msg, 'tool_call_id', '')
+            tool_call_id = getattr(msg, 'tool_call_id', '') or ''
             clean = re.sub(r'\[TOOL_RESULT\]\s*', '', text, flags=re.IGNORECASE)
             text = f"[tool_result id={tool_call_id[:8]}] {clean}"
 
@@ -400,7 +400,7 @@ def build_query_from_messages(
             content = _serialize_tool_calls(msg.tool_calls)
 
         if role == "tool":
-            tool_call_id = getattr(msg, 'tool_call_id', '')
+            tool_call_id = getattr(msg, 'tool_call_id', '') or ''
             clean = re.sub(r'\[TOOL_RESULT\]\s*', '', content, flags=re.IGNORECASE)
             clean = clean.strip()
             content = f"[tool_result id={tool_call_id[:8]}] {clean}"

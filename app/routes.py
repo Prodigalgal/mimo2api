@@ -1353,6 +1353,7 @@ async def _do_response_chat(body: dict, account) -> tuple:
             role=m.get("role", "user"),
             content=m.get("content"),
             tool_calls=m.get("tool_calls"),
+            tool_call_id=m.get("tool_call_id"),
         ))
 
     # 提取媒体
@@ -1491,6 +1492,7 @@ async def _stream_response_events(body: dict, account):
             role=m.get("role", "user"),
             content=m.get("content"),
             tool_calls=m.get("tool_calls"),
+            tool_call_id=m.get("tool_call_id"),
         ))
 
     query_text, base64_medias, text_files, processed_msgs = extract_medias_from_messages(openai_messages)
@@ -1648,21 +1650,27 @@ async def _stream_response_events(body: dict, account):
                                 elif ev.type == 'tool_calls':
                                     for tc in ev.data:
                                         idx = len(tool_calls_map)
+                                        fc_item = _response_function_call_item(tc)
+                                        fc_id = fc_item["id"]
                                         tool_calls_map[idx] = {
-                                            "id": tc.get("id") or f"call_{uuid.uuid4().hex[:24]}",
+                                            "id": fc_id,
+                                            "call_id": fc_item.get("call_id", fc_id),
                                             "name": tc.get("function", {}).get("name", ""),
                                             "arguments": tc.get("function", {}).get("arguments", "{}"),
                                             "status": "completed",
                                         }
-                                        fc_item = _response_function_call_item(tc)
-                                        oi, start_evt = _start_output_item(fc_item)
+                                        # output_item.added 不预填 arguments
+                                        added_item = {k: v for k, v in fc_item.items() if k != "arguments"}
+                                        oi, start_evt = _start_output_item(added_item)
                                         if start_evt:
                                             yield start_evt
+                                        # 始终通过 delta 传递参数
+                                        args_str = fc_item.get("arguments", "{}")
                                         yield {
                                             "type": "response.function_call_arguments.delta",
-                                            "item_id": fc_item["id"],
+                                            "item_id": fc_id,
                                             "output_index": oi,
-                                            "delta": fc_item.get("arguments", "{}"),
+                                            "delta": args_str,
                                         }
                         buffer = keep
                         break
@@ -1767,21 +1775,27 @@ async def _stream_response_events(body: dict, account):
                 elif ev.type == 'tool_calls':
                     for tc in ev.data:
                         idx = len(tool_calls_map)
+                        fc_item = _response_function_call_item(tc)
+                        fc_id = fc_item["id"]
                         tool_calls_map[idx] = {
-                            "id": tc.get("id") or f"call_{uuid.uuid4().hex[:24]}",
+                            "id": fc_id,
+                            "call_id": fc_item.get("call_id", fc_id),
                             "name": tc.get("function", {}).get("name", ""),
                             "arguments": tc.get("function", {}).get("arguments", "{}"),
                             "status": "completed",
                         }
-                        fc_item = _response_function_call_item(tc)
-                        oi, start_evt = _start_output_item(fc_item)
+                        # output_item.added 不预填 arguments
+                        added_item = {k: v for k, v in fc_item.items() if k != "arguments"}
+                        oi, start_evt = _start_output_item(added_item)
                         if start_evt:
                             yield start_evt
+                        # 始终通过 delta 传递参数
+                        args_str = fc_item.get("arguments", "{}")
                         yield {
                             "type": "response.function_call_arguments.delta",
-                            "item_id": fc_item["id"],
+                            "item_id": fc_id,
                             "output_index": oi,
-                            "delta": fc_item.get("arguments", "{}"),
+                            "delta": args_str,
                         }
 
         else:
@@ -1952,7 +1966,7 @@ async def _stream_response_events(body: dict, account):
             output_by_id[tc["id"]] = {
                 "id": tc["id"],
                 "type": "function_call",
-                "call_id": tc["id"],
+                "call_id": tc.get("call_id", tc["id"]),
                 "name": tc["name"],
                 "arguments": tc["arguments"],
                 "status": "completed",
@@ -2006,6 +2020,10 @@ async def _stream_response_events(body: dict, account):
                 "arguments": tc["arguments"],
             }
         for idx, item in enumerate(output):
+            if item.get("type") == "reasoning":
+                # 由 reasoning_text.done 结束，不发 output_item.done
+                # 避免 RikkaHub 重复创建空白思维链卡片
+                continue
             yield {
                 "type": "response.output_item.done",
                 "output_index": idx,
