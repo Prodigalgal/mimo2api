@@ -53,14 +53,35 @@ def build_tool_prompt(tools: List[Dict[str, Any]]) -> str:
         if not name:
             continue
         desc = _safe_get(func, "description", default="") or _safe_get(tool, "description", default="")
-        short_desc = desc.split("\n")[0].strip()
-        if short_desc:
-            parts.append(f"{name}({short_desc})")
+        if desc.strip():
+            parts.append(f"{name}({desc.strip()})")
         else:
             parts.append(name)
     if not parts:
         return ""
-    return "可用工具: " + ", ".join(parts)
+    available = "可用工具:\n" + "\n".join(f"  - {p}" for p in parts)
+
+    rules = """TOOL CALL FORMAT — FOLLOW EXACTLY:
+
+TOOL_CALL: 工具名(参数=值)
+
+RULES:
+1) Use exactly "TOOL_CALL: name(args)" on its own line
+2) Separate multiple args with commas: TOOL_CALL: search(query="hello", limit=5)
+3) If no args needed, use empty parens: TOOL_CALL: get_time()
+4) DO NOT wrap in markdown fences or code blocks
+5) DO NOT add explanations before or after the TOOL_CALL line
+6) After getting tool results, reply directly to user — do NOT repeat the same tool call
+7) If you don't need tools, just reply normally
+
+【WRONG — Do NOT do these】:
+  ✗ TOOL_CALL: get_time()  the current time is...
+  ✗ ```TOOL_CALL: get_time()```
+  ✗ Let me call the tool: TOOL_CALL: get_time()
+  ✗ TOOL_CALL get_time() ← missing colon after TOOL_CALL"""
+
+    return available + "\n\n" + rules
+
 
 
 # ─── 提取工具名列表 ──────────────────────────────────────────
@@ -331,15 +352,20 @@ def _extract_xml_tool_call(
 
     func_pattern = r"<function=(\w+)>(.*?)</function>"
     fm = re.search(func_pattern, inner, re.DOTALL | re.IGNORECASE)
-    if not fm:
-        return None
-
-    name = fm.group(1).strip()
+    if fm:
+        name = fm.group(1).strip()
+        func_body = fm.group(2)
+    else:
+        # 回退：内容格式 <function>NAME</function> 或 <function>NAME>（畸形闭合）
+        content_pattern = r"<function>(.*?)(?:</function>|$)"
+        fm = re.search(content_pattern, inner, re.DOTALL | re.IGNORECASE)
+        if not fm:
+            return None
+        name = fm.group(1).strip().rstrip('>')
+        func_body = ""
     resolved = _resolve_tool_name(name, tool_names)
     if not resolved:
         return None
-
-    func_body = fm.group(2)
 
     # 提取 <parameter=KEY>VALUE</parameter>
     args = {}

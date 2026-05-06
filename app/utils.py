@@ -411,8 +411,28 @@ def build_query_from_messages(
 
     # 注入工具提示
     if tools:
-        tool_prompt = build_tool_prompt(tools)
-        if tool_prompt:
-            result += f"\n{tool_prompt}"
+        has_tool_result = any(
+            (hasattr(m, 'role') and m.role == "tool") or
+            (isinstance(m, dict) and m.get('role') == "tool")
+            for m in messages
+        )
+        if has_tool_result:
+            # 后续轮：列工具名+简介，不注任何指令，避免循环
+            parts = []
+            for t in tools:
+                fn = t.get("function", {}) if isinstance(t, dict) else getattr(t, "function", {})
+                name = (fn.get("name") if isinstance(fn, dict) else getattr(fn, "name", "")) or (t.get("name") if isinstance(t, dict) else getattr(t, "name", ""))
+                if not name:
+                    continue
+                desc = (fn.get("description") if isinstance(fn, dict) else getattr(fn, "description", "")) or (t.get("description") if isinstance(t, dict) else getattr(t, "description", ""))
+                short = desc.strip() if desc else ""
+                parts.append(f"{name}({short})" if short else name)
+            if parts:
+                result += f"\n可用工具: {', '.join(parts)}"
+        else:
+            # 首轮：完整格式指令（含规则和错误示例）
+            tool_prompt = build_tool_prompt(tools)
+            if tool_prompt:
+                result += f"\n{tool_prompt}"
 
     return result

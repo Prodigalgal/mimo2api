@@ -213,7 +213,7 @@ class StreamSieve:
 
         # TOOL_CALL: 文本格式 — 以换行结束
         if buf.lstrip().upper().startswith("TOOL_CALL:"):
-            return "\n" in buf
+            return ")" in buf or "\n" in buf  # 等括号闭合或换行才完整
 
         # [调用工具:] 中文格式
         if "[调用工具:" in buf:
