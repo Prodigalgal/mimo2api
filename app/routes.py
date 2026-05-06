@@ -120,8 +120,12 @@ async def _background_refresh():
 
 
 @router.get("/v1/models")
-async def list_models(authorization: Optional[str] = Header(None)):
-    if not validate_api_key(authorization):
+async def list_models(
+    authorization: Optional[str] = Header(None),
+    x_api_key: Optional[str] = Header(None, alias="x-api-key"),
+):
+    api_key = authorization or (f"Bearer {x_api_key}" if x_api_key else None)
+    if not validate_api_key(api_key):
         raise HTTPException(status_code=401, detail={"error": {"message": "invalid api key"}})
     asyncio.create_task(_background_refresh())
     models = get_models_list()
@@ -142,8 +146,12 @@ async def list_models(authorization: Optional[str] = Header(None)):
 
 
 @router.post("/v1/models/refresh")
-async def refresh_models(authorization: Optional[str] = Header(None)):
-    if not validate_api_key(authorization):
+async def refresh_models(
+    authorization: Optional[str] = Header(None),
+    x_api_key: Optional[str] = Header(None, alias="x-api-key"),
+):
+    api_key = authorization or (f"Bearer {x_api_key}" if x_api_key else None)
+    if not validate_api_key(api_key):
         raise HTTPException(status_code=401, detail={"error": {"message": "invalid api key"}})
     models = await discover_models()
     ctx_items = [(m, _model_context(m)) for m in models]
@@ -163,8 +171,13 @@ async def refresh_models(authorization: Optional[str] = Header(None)):
 
 
 @router.get("/v1/models/{model_id}")
-async def get_model(model_id: str, authorization: Optional[str] = Header(None)):
-    if not validate_api_key(authorization):
+async def get_model(
+    model_id: str,
+    authorization: Optional[str] = Header(None),
+    x_api_key: Optional[str] = Header(None, alias="x-api-key"),
+):
+    api_key = authorization or (f"Bearer {x_api_key}" if x_api_key else None)
+    if not validate_api_key(api_key):
         raise HTTPException(status_code=401, detail={"error": {"message": "invalid api key"}})
     models = get_models_list()
     if model_id in models:
@@ -341,9 +354,16 @@ def _build_chunk(
 @router.post("/v1/chat/completions")
 async def chat_completions(
     request: OpenAIRequest,
-    authorization: Optional[str] = Header(None)
+    authorization: Optional[str] = Header(None),
+    x_api_key: Optional[str] = Header(None, alias="x-api-key"),
 ):
+    api_key = authorization or (f"Bearer {x_api_key}" if x_api_key else None)
+    if not validate_api_key(api_key):
+        raise HTTPException(status_code=401, detail={"error": {"message": "invalid api key"}})
+
     """OpenAI兼容的聊天接口。"""
+
+    account = config_manager.get_next_account()
 
     # # 请求日志（发版时关闭）
     # try:
@@ -363,9 +383,6 @@ async def chat_completions(
     #         pass
     # except Exception:
     #     pass
-
-    if not validate_api_key(authorization):
-        raise HTTPException(status_code=401, detail={"error": {"message": "invalid api key"}})
 
     account = config_manager.get_next_account()
     if not account:
@@ -2076,9 +2093,14 @@ async def _sse_stream_response(body: dict, account):
 # ─── 路由：8 个 Responses API 端点 ──────────────────────────
 
 @router.post("/v1/responses")
-async def create_response(request: Request, authorization: Optional[str] = Header(None)):
+async def create_response(
+    request: Request,
+    authorization: Optional[str] = Header(None),
+    x_api_key: Optional[str] = Header(None, alias="x-api-key"),
+):
     """创建 Response（非流式/流式）。"""
-    if not validate_api_key(authorization):
+    api_key = authorization or (f"Bearer {x_api_key}" if x_api_key else None)
+    if not validate_api_key(api_key):
         raise HTTPException(status_code=401, detail={"error": {"message": "invalid api key"}})
 
     body = await request.json()
@@ -2136,9 +2158,14 @@ async def create_response(request: Request, authorization: Optional[str] = Heade
 
 
 @router.post("/v1/responses/input_tokens")
-async def count_input_tokens(request: Request, authorization: Optional[str] = Header(None)):
+async def count_input_tokens(
+    request: Request,
+    authorization: Optional[str] = Header(None),
+    x_api_key: Optional[str] = Header(None, alias="x-api-key"),
+):
     """估算 input tokens。"""
-    if not validate_api_key(authorization):
+    api_key = authorization or (f"Bearer {x_api_key}" if x_api_key else None)
+    if not validate_api_key(api_key):
         raise HTTPException(status_code=401, detail={"error": {"message": "invalid api key"}})
 
     body = await request.json()
@@ -2188,9 +2215,14 @@ def _compact_response_record(source: dict, body: dict) -> dict:
 
 
 @router.post("/v1/responses/compact")
-async def compact_response(request: Request, authorization: Optional[str] = Header(None)):
+async def compact_response(
+    request: Request,
+    authorization: Optional[str] = Header(None),
+    x_api_key: Optional[str] = Header(None, alias="x-api-key"),
+):
     """压缩 response。"""
-    if not validate_api_key(authorization):
+    api_key = authorization or (f"Bearer {x_api_key}" if x_api_key else None)
+    if not validate_api_key(api_key):
         raise HTTPException(status_code=401, detail={"error": {"message": "invalid api key"}})
 
     body = await request.json()
@@ -2206,9 +2238,15 @@ async def compact_response(request: Request, authorization: Optional[str] = Head
 
 
 @router.post("/v1/responses/{response_id}/compact")
-async def compact_response_by_id(response_id: str, request: Request, authorization: Optional[str] = Header(None)):
+async def compact_response_by_id(
+    response_id: str,
+    request: Request,
+    authorization: Optional[str] = Header(None),
+    x_api_key: Optional[str] = Header(None, alias="x-api-key"),
+):
     """按 ID 压缩 response。"""
-    if not validate_api_key(authorization):
+    api_key = authorization or (f"Bearer {x_api_key}" if x_api_key else None)
+    if not validate_api_key(api_key):
         raise HTTPException(status_code=401, detail={"error": {"message": "invalid api key"}})
 
     body = await request.json()
@@ -2221,9 +2259,14 @@ async def compact_response_by_id(response_id: str, request: Request, authorizati
 
 
 @router.post("/v1/responses/{response_id}/cancel")
-async def cancel_response(response_id: str, authorization: Optional[str] = Header(None)):
+async def cancel_response(
+    response_id: str,
+    authorization: Optional[str] = Header(None),
+    x_api_key: Optional[str] = Header(None, alias="x-api-key"),
+):
     """取消 response。"""
-    if not validate_api_key(authorization):
+    api_key = authorization or (f"Bearer {x_api_key}" if x_api_key else None)
+    if not validate_api_key(api_key):
         raise HTTPException(status_code=401, detail={"error": {"message": "invalid api key"}})
 
     record = _get_response_record(response_id)
@@ -2244,9 +2287,14 @@ async def cancel_response(response_id: str, authorization: Optional[str] = Heade
 
 
 @router.get("/v1/responses/{response_id}")
-async def get_response(response_id: str, authorization: Optional[str] = Header(None)):
+async def get_response(
+    response_id: str,
+    authorization: Optional[str] = Header(None),
+    x_api_key: Optional[str] = Header(None, alias="x-api-key"),
+):
     """获取 response 记录。"""
-    if not validate_api_key(authorization):
+    api_key = authorization or (f"Bearer {x_api_key}" if x_api_key else None)
+    if not validate_api_key(api_key):
         raise HTTPException(status_code=401, detail={"error": {"message": "invalid api key"}})
 
     record = _get_response_record(response_id)
@@ -2256,9 +2304,15 @@ async def get_response(response_id: str, authorization: Optional[str] = Header(N
 
 
 @router.get("/v1/responses/{response_id}/input_items")
-async def get_response_input_items(response_id: str, request: Request, authorization: Optional[str] = Header(None)):
+async def get_response_input_items(
+    response_id: str,
+    request: Request,
+    authorization: Optional[str] = Header(None),
+    x_api_key: Optional[str] = Header(None, alias="x-api-key"),
+):
     """获取 response 的 input items。"""
-    if not validate_api_key(authorization):
+    api_key = authorization or (f"Bearer {x_api_key}" if x_api_key else None)
+    if not validate_api_key(api_key):
         raise HTTPException(status_code=401, detail={"error": {"message": "invalid api key"}})
 
     record = _get_response_record(response_id)
@@ -2314,9 +2368,14 @@ async def get_response_input_items(response_id: str, request: Request, authoriza
 
 
 @router.delete("/v1/responses/{response_id}")
-async def delete_response(response_id: str, authorization: Optional[str] = Header(None)):
+async def delete_response(
+    response_id: str,
+    authorization: Optional[str] = Header(None),
+    x_api_key: Optional[str] = Header(None, alias="x-api-key"),
+):
     """删除 response 记录。"""
-    if not validate_api_key(authorization):
+    api_key = authorization or (f"Bearer {x_api_key}" if x_api_key else None)
+    if not validate_api_key(api_key):
         raise HTTPException(status_code=401, detail={"error": {"message": "invalid api key"}})
 
     if not _delete_response_record(response_id):

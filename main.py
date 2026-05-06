@@ -9,6 +9,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from pathlib import Path
 from app.routes import router, _do_discover
 from app.config import config_manager
+from app.anthropic_routes import router as anthropic_router
+from app.batch import init_batch_storage as init_anthropic_batches
 
 # 创建FastAPI应用
 app = FastAPI(
@@ -38,6 +40,12 @@ async def startup_discover_models():
 
 # 注册路由
 app.include_router(router)
+app.include_router(anthropic_router)
+
+# 初始化 Anthropic batch 存储
+import os
+_anthropic_batch_dir = os.path.join(os.path.dirname(__file__), ".anthropic_batches")
+init_anthropic_batches(_anthropic_batch_dir)
 
 # 静态文件目录
 web_dir = Path(__file__).parent / "web"

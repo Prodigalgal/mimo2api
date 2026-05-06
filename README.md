@@ -4,7 +4,7 @@
 [![License](https://img.shields.io/badge/License-MIT-green)](LICENSE)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.115-teal)](https://fastapi.tiangolo.com/)
 
-将**小米 MiMo AI Studio** 网页端对话转换为 **OpenAI 兼容 API**，支持多模态（文本 + 图片 + 文件）、工具调用（Function Calling）、多账号负载均衡。
+将**小米 MiMo AI Studio** 网页端对话转换为 **OpenAI 兼容 API**，支持多模态（文本 + 图片 + 文件）、工具调用（Function Calling）、Anthropic Messages API、多账号负载均衡。
 
 
 本项目基于原[mimo2api](https://github.com/Water008/MiMo2API) 修改。
@@ -47,6 +47,7 @@
 ## 特性
 
 - **OpenAI 完全兼容** — 标准 `/v1/chat/completions`（流式/非流式）、`/v1/models`、`/v1/models/{id}` 端点，可直接对接 ChatBox、NextChat、LobeChat 等任何 OpenAI 客户端
+- **Anthropic Messages API 兼容** — 完整支持 `/v1/messages`（流式/非流式）+ count_tokens + batches CRUD + message_get，共 9 个 Anthropic 端点，可对接 RikkaHub 等 Anthropic 客户端
 - **工具调用（Function Calling）** — 5 种提取策略覆盖 MiMo 原生 XML (`<tool_call>`)、TOOL_CALL 标签、JSON、`<function_call>` XML、自由文本匹配，自动清洗响应中的工具残留
 - **流式筛分** — 有工具调用时实时分离正文与工具调用内容，客户端无需等待完整响应即可逐步接收，RikkaHub 等不再全文缓冲
 - **多模态支持** — omni 模型支持图片输入（URL、base64），自动完成三步上传流程（genUploadInfo → PUT → resource/parse）；所有模型支持文本文件上传（.md / .txt 等），同样走 MiMo 原生上传流程
@@ -71,6 +72,8 @@
 │  ┌─────────┐  ┌──────────────┐  ┌──────────────────────┐ │
 │  │ routes  │  │ tool_sieve │  │  tool_call   │  │     mimo_client      │ │
 │  │ (API)   │──│ (流式筛分)  │──│ (5策略提取)   │──│ (HTTP/SSE 代理)       │ │
+│  │anthropic │  │ anthropic  │  │    batch     │                      │ │
+│  │ (路由)   │  │ (格式转换)  │  │ (存储/批处理) │                      │ │
 │  └─────────┘  └──────────────┘  └──────────────────────┘ │
 │  ┌─────────┐  ┌──────────────┐  ┌──────────────────────┐ │
 │  │ config  │  │    utils     │  │      models           │ │
@@ -358,6 +361,116 @@ curl http://localhost:8080/v1/responses \
 
 支持流式（`"stream": true`）、工具调用、深度思考、系统指令等，详见下方 [Responses API 详解](#responses-api-详解)。
 
+## 9. Anthropic Messages API
+
+MiMo2API v2.0.0 新增 Anthropic Messages API 完整兼容支持。只需将 API 地址和密钥换过来即可：
+
+```bash
+# 非流式对话
+curl -X POST http://localhost:8080/v1/messages \
+  -H "x-api-key: sk-mimo" \
+  -H "Content-Type: application/json" \
+  -H "anthropic-version: 2023-06-01" \
+  -d '{
+    "model": "mimo-v2-flash",
+    "max_tokens": 1024,
+    "messages": [
+      {"role": "user", "content": "你好"}
+    ]
+  }'
+
+# 流式对话
+curl -N -X POST http://localhost:8080/v1/messages \
+  -H "x-api-key: sk-mimo" \
+  -H "Content-Type: application/json" \
+  -H "anthropic-version: 2023-06-01" \
+  -d '{
+    "model": "mimo-v2-flash",
+    "max_tokens": 1024,
+    "stream": true,
+    "messages": [
+      {"role": "user", "content": "讲个故事"}
+    ]
+  }'
+```
+
+### 支持的端点（9 个）
+
+| 端点 | 方法 | 说明 |
+|------|------|------|
+| `/v1/messages` | POST | 发消息（流式/非流式，含思考链） |
+| `/v1/messages/count_tokens` | POST | 计算 token 数（本地估算，需 tiktoken） |
+| `/v1/messages/{message_id}` | GET | 查询已存储的消息 |
+| `/v1/messages/batches` | POST | 创建批量任务 |
+| `/v1/messages/batches` | GET | 批量任务列表 |
+| `/v1/messages/batches/{batch_id}` | GET | 批量任务详情 |
+| `/v1/messages/batches/{batch_id}/cancel` | POST | 取消批量任务 |
+| `/v1/messages/batches/{batch_id}/results` | GET | 下载结果 JSONL |
+| `/v1/messages/batches/{batch_id}` | DELETE | 删除批量任务 |
+
+### 认证
+
+Anthropic 客户端使用 `x-api-key` 头（RikkaHub 自动切换），也兼容 `Authorization: Bearer`：
+
+```bash
+# x-api-key（Anthropic 原生）
+curl -H "x-api-key: sk-mimo" ...
+
+# Authorization Bearer（向后兼容）
+curl -H "Authorization: Bearer sk-mimo" ...
+```
+
+### 思考链
+
+MiMo 的 `<think>` 标签内容自动转换为 Anthropic thinking block。流式响应按 **thinking → text → tool_use** 顺序输出 content blocks：
+
+```
+message_start
+  content_block_start (thinking)
+    content_block_delta (thinking_delta ×N)
+  content_block_stop
+  content_block_start (text)
+    content_block_delta (text_delta ×N)
+  content_block_stop
+message_delta + message_stop
+```
+
+### 工具调用
+
+支持 Anthropic 格式的工具定义（`input_schema` → OpenAI `parameters` 自动转换）：
+
+```bash
+curl -X POST http://localhost:8080/v1/messages \
+  -H "x-api-key: sk-mimo" \
+  -H "Content-Type: application/json" \
+  -H "anthropic-version: 2023-06-01" \
+  -d '{
+    "model": "mimo-v2-flash",
+    "max_tokens": 1024,
+    "messages": [
+      {"role": "user", "content": "现在几点"}
+    ],
+    "tools": [{
+      "name": "get_time",
+      "description": "获取当前时间",
+      "input_schema": {"type": "object", "properties": {}}
+    }]
+  }'
+```
+
+返回 Anthropic 格式的 `tool_use` blocks：
+
+```json
+{
+  "content": [
+    {"type": "tool_use", "id": "tu_xxx", "name": "get_time", "input": {}}
+  ],
+  "stop_reason": "tool_use"
+}
+```
+
+> **注意：** MiMo 的工具调用基于文本 TOOL_CALL 格式模拟，非原生 function calling。`no-tools` 分支不含工具调用支持。
+
 ## 工具调用详解
 
 MiMo API 本身**不支持** OpenAI function calling 格式。本代理通过**提示词注入 + 多策略提取**实现：
@@ -429,6 +542,7 @@ git clone -b no-tools https://github.com/Fly143/MiMo2API.git
 | 工具提取解析 | ✅ 5 种策略提取 TOOL_CALL | ❌ 不解析 |
 | 响应清理 | ✅ 清理工具残留文本 | ❌ 不需要 |
 | Responses API | ✅ `/v1/responses`（含工具调用） | ✅ `/v1/responses`（纯对话） |
+| Anthropic API | ✅ `/v1/messages`（含工具调用） | ✅ `/v1/messages`（纯对话） |
 | 多模态 | ✅ | ✅ |
 | 文件上传（.md/.txt） | ✅ | ✅ |
 | 深度思考 | ✅ | ✅ |
@@ -563,8 +677,10 @@ lsof -i :8080
 | 地址 | 说明 |
 |------|------|
 | `http://localhost:8080` | Web 管理后台（配置账号） |
-| `http://localhost:8080/v1` | OpenAI 兼容 API 根路径 |
+| `http://localhost:8080/v1` | OpenAI + Anthropic 兼容 API 根路径 |
 | `http://localhost:8080/docs` | Swagger API 文档 |
+| `http://localhost:8080/v1/messages` | Anthropic Messages API |
+| `http://localhost:8080/v1/responses` | OpenAI Responses API |
 
 ## 项目结构
 
@@ -575,16 +691,23 @@ MiMo2API/
 ├── requirements.txt         # Python 依赖
 ├── config.example.json      # 配置文件模板
 ├── config.json              # 实际配置（.gitignore，含凭证）
-└── app/
+├── app/
     ├── __init__.py
     ├── routes.py            # API 路由（chat/models/管理面板/账号CRUD）
+    ├── anthropic_routes.py  # Anthropic Messages API 路由（9 个端点）
+    ├── anthropic.py         # Anthropic ↔ OpenAI 格式转换核心
+    ├── batch.py             # Anthropic 批量任务 + count_tokens
     ├── models.py            # OpenAI 兼容数据模型（Pydantic）
     ├── mimo_client.py       # MiMo API 客户端（HTTP SSE 流处理）
     ├── config.py            # 配置管理（多账号、线程安全、轮询）
     ├── utils.py             # 工具函数（cURL解析、图片上传、消息构建）
-    ├── tool_sieve.py       # 流式筛分引擎（实时分离工具调用与正文）
+    ├── tool_sieve.py        # 流式筛分引擎（实时分离工具调用与正文）
     ├── tool_call.py         # 工具调用（提示词注入 + 5策略提取 + 清理）
-    └── admin.html           # Web 管理面板（内嵌单文件）
+    ├── usage_store.py       # 用量数据持久化
+    ├── session_store.py     # 会话管理（指纹续接 conversationId）
+    ├── response_store.py    # Responses API 记录持久化
+    └── web/
+        └── index.html       # Web 管理面板
 ```
 
 ## 配置参考
