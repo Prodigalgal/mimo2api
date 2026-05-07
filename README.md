@@ -50,7 +50,7 @@
 
 - **OpenAI 完全兼容** — 标准 `/v1/chat/completions`（流式/非流式）、`/v1/models`、`/v1/models/{id}` 端点，可直接对接 ChatBox、NextChat、LobeChat 等任何 OpenAI 客户端
 - **Anthropic Messages API 兼容** — 完整支持 `/v1/messages`（流式/非流式）+ count_tokens + batches CRUD + message_get，共 9 个 Anthropic 端点，可对接 RikkaHub 等 Anthropic 客户端
-- **工具调用（Function Calling）** — 5 种提取策略覆盖 MiMo 原生 XML (`<tool_call>`)、TOOL_CALL 标签、JSON、`<function_call>` XML、自由文本匹配，自动清洗响应中的工具残留
+- **工具调用（Function Calling）** — 7 种提取策略覆盖 MiMoML（`<|MiMoML|tool_calls>`）、MiMo 原生 XML (`<tool_call>`)、TOOL_CALL 标签、JSON、`<function_call>` XML、中文格式、自由文本匹配，自动清洗响应中的工具残留
 - **流式筛分** — 有工具调用时实时分离正文与工具调用内容，客户端无需等待完整响应即可逐步接收，RikkaHub 等不再全文缓冲
 - **多模态支持** — omni 模型支持图片输入（URL、base64），自动完成三步上传流程（genUploadInfo → PUT → resource/parse）；所有模型支持文本文件上传（.md / .txt 等），同样走 MiMo 原生上传流程
 - **深度思考** — 支持 reasoning_effort 参数，自动分离 `<think>` 块输出
@@ -490,27 +490,31 @@ curl -X POST http://localhost:8080/v1/messages \
 
 ## 工具调用详解
 
-MiMo API 本身**不支持** OpenAI function calling 格式。本代理通过**提示词注入 + 多策略提取**实现：
+MiMo API 本身**不支持** OpenAI function calling 格式。本代理通过**MiMoML 提示词注入 + 7 策略提取**实现：
 
 ### 提示词注入
 
-将 OpenAI tools 定义转换为极简文本，注入到 system 消息中：
+将 OpenAI tools 定义转换为 MiMoML（MiMo Markup Language）格式，注入到 system 消息中：
 
-```text
-# Tools
-- get_weather(city) — 查询指定城市的天气
-- search_web(query, page) — 搜索网页
+```xml
+<|MiMoML|tool_calls>
+  <|MiMoML|invoke name="get_weather">
+    <|MiMoML|parameter name="city"><![CDATA[北京]]></|MiMoML|parameter>
+  </|MiMoML|invoke>
+</|MiMoML|tool_calls>
 ```
 
-### 5 种提取策略（按优先级）
+### 7 种提取策略（按优先级）
 
 | 策略 | 格式 | 说明 |
 |------|------|------|
-| 1 | `TOOL_CALL: name(key=value)` | 正则匹配，最可靠 |
+| 0 | `<\|MiMoML\|tool_calls><\|MiMoML\|invoke name="X">...</\|MiMoML\|invoke></\|MiMoML\|tool_calls>` | MiMoML 格式，最高优先级 |
+| 1 | `TOOL_CALL: name(key=value)` | 正则匹配，旧格式兜底 |
 | 2 | `{"name": "x", "arguments": {...}}` | JSON 块解析 |
-| 3 | `name(args)` | 自由文本关键词匹配 |
-| 4 | `<tool_call><function=NAME><parameter=K>V</parameter></function></tool_call>` | MiMo 原生 XML 格式 |
-| 5 | `<function_call>{"name":"x","arguments":{...}}</function_call>` | XML 包裹 JSON |
+| 3 | `<tool_call><function=NAME><parameter=K>V</parameter></function></tool_call>` | MiMo 原生 XML 格式 |
+| 4 | `<function_call>{"name":"x","arguments":{...}}</function_call>` | XML 包裹 JSON |
+| 5 | `[调用工具: NAME]` | 中文格式 |
+| 6 | `name(args)` | 自由文本关键词匹配 |
 
 ### 响应清理
 
@@ -815,5 +819,8 @@ MIT License
 
 ---
 
-**致谢：** 小米 MiMo AI Studio 提供的基础 API 服务。
-[GoblinHonest/mimo2api_mimoapi](https://github.com/GoblinHonest/mimo2api_mimoapi) — 会话管理（消息指纹续接 MiMo conversationId）设计参考。
+**致谢：**
+
+- 小米 MiMo AI Studio 提供的基础 API 服务。
+- [GoblinHonest/mimo2api_mimoapi](https://github.com/GoblinHonest/mimo2api_mimoapi) — 会话管理（消息指纹续接 MiMo conversationId）设计参考。
+- [CJackHwang/ds2api](https://github.com/CJackHwang/ds2api) — DSML 工具调用格式与流式筛分引擎设计参考。

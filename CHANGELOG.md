@@ -2,6 +2,20 @@
 
 本文件记录 MiMo2API 的所有重要变更。
 
+## [v2.3.0] — 2026-05-08
+
+### Added
+- **MiMoML 工具调用格式** — 新增 MiMoML（MiMo Markup Language）格式作为主要工具调用协议
+  - `<|MiMoML|tool_calls><|MiMoML|invoke name="X"><|MiMoML|parameter name="K"><![CDATA[V]]></|MiMoML|parameter></|MiMoML|invoke></|MiMoML|tool_calls>`
+  - CDATA 包裹解决转义问题，多工具调用天然支持
+  - 提升 Roo Code 等 DeepSeek 生态客户端的兼容性
+- **策略0：MiMoML 提取** — `strip_mimoml()` 将 MiMoML 转为标准 XML 后解析
+- **致谢 ds2api** — [CJackHwang/ds2api](https://github.com/CJackHwang/ds2api) DSML 格式设计参考
+
+### Changed
+- **工具提示词** — `build_tool_prompt()` 从 `TOOL_CALL:` 格式切换到 MiMoML 格式
+- **`clean_tool_text()`** — 新增 MiMoML/CDATA 标签清理正则
+
 ## [v2.1.0] — 2026-05-07
 
 ### Added

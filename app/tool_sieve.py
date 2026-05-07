@@ -4,7 +4,7 @@ StreamSieve — 流式筛分引擎
 
 模式：
   - 'tool_call': 检测 TOOL_CALL: name(args) / <tool_call> / <function_call> / [调用工具:]
-  - 'dsml':     检测 <|DSML|tool_calls> / <tool_calls>（deepseek-free-api 用）
+  - 'mimoml':   检测 <|MiMoML|tool_calls> / <tool_calls>
 
 参考: https://github.com/CJackHwang/ds2api (internal/toolstream/)
 """
@@ -29,7 +29,7 @@ class StreamSieve:
         "<function_call",
         "<function=",
         "[调用工具:",
-        "<|DSML|tool_calls>",
+        "<|MiMoML|tool_calls>",
         "<tool_calls>",
     ]
 
@@ -235,7 +235,7 @@ class StreamSieve:
                 return True
             if "<tool_calls>" in buf and "</tool_calls>" in buf:
                 return True
-            if "<|DSML|tool_calls>" in buf and "</|DSML|tool_calls>" in buf:
+            if "<|MiMoML|tool_calls>" in buf and "</|MiMoML|tool_calls>" in buf:
                 return True
             return False
 
@@ -283,10 +283,10 @@ class StreamSieve:
             close_pos = rest.find("</tool_calls>")
             if close_pos >= 0:
                 end = start + close_pos + len("</tool_calls>")
-        elif "<|DSML|tool_calls>" in rest:
-            close_pos = rest.find("</|DSML|tool_calls>")
+        elif "<|MiMoML|tool_calls>" in rest:
+            close_pos = rest.find("</|MiMoML|tool_calls>")
             if close_pos >= 0:
-                end = start + close_pos + len("</|DSML|tool_calls>")
+                end = start + close_pos + len("</|MiMoML|tool_calls>")
 
         if end < 0:
             return prefix, ""
