@@ -2,6 +2,27 @@
 
 本文件记录 MiMo2API 的所有重要变更。
 
+## [v2.1.0] — 2026-05-07
+
+### Added
+- **Anthropic 模型名映射** — Claude Code CLI 等工具可使用 Anthropic 风格模型名（如 `claude-sonnet-4-6`），内部自动映射为对应 MiMo 模型
+  - `claude-opus-4-6` → `mimo-v2-pro`
+  - `claude-sonnet-4-6` → `mimo-v2-flash`
+  - `claude-haiku-4-5` → `mimo-v2-flash`
+  - 支持 search/nothinking 变体及 Claude 3.x/4.x 历史名
+- MiMo 原生名（`mimo-*`）继续直接可用，`/v1/models` 返回不变
+
+## [v2.0.0] — 2026-05-06
+
+### Added
+- **Anthropic Messages API 全兼容** — 新增 9 个 Anthropic 端点：`/v1/messages`（流式/非流式）、count_tokens、message CRUD、batch 全流程
+- **多账号管理** — Web 面板增删账号、轮询负载均衡
+- **TTS 语音合成**（no-tools）— 声线克隆、音色设计、导演模式
+
+### Changed
+- 路由拆分为 `app/anthropic_routes.py`（APIRouter 模式）
+- `app/anthropic.py` + `app/batch.py` 模块化
+
 ## [Unreleased]
 
 ### Changed
