@@ -63,23 +63,23 @@ router = APIRouter()
 # 此映射表在 Anthropic 端点请求时自动转换。
 ANTHROPIC_MODEL_ALIASES = {
     # Claude 4.x 当前
-    "claude-opus-4-6": "mimo-v2-pro",
-    "claude-sonnet-4-6": "mimo-v2-flash",
+    "claude-opus-4-6": "mimo-v2.5-pro",
+    "claude-sonnet-4-6": "mimo-v2-pro",
     "claude-haiku-4-5": "mimo-v2-flash",
     # Claude 4.x 历史
-    "claude-sonnet-4-5": "mimo-v2-flash",
-    "claude-opus-4-1": "mimo-v2-pro",
-    "claude-opus-4-0": "mimo-v2-pro",
+    "claude-sonnet-4-5": "mimo-v2-pro",
+    "claude-opus-4-1": "mimo-v2.5-pro",
+    "claude-opus-4-0": "mimo-v2.5-pro",
     "claude-sonnet-4-0": "mimo-v2-flash",
     # Claude 3.x
-    "claude-3-7-sonnet": "mimo-v2-flash",
+    "claude-3-7-sonnet": "mimo-v2-pro",
     "claude-3-5-sonnet": "mimo-v2-flash",
-    "claude-3-opus": "mimo-v2-pro",
+    "claude-3-opus": "mimo-v2.5",
     "claude-3-sonnet": "mimo-v2-flash",
     "claude-3-haiku": "mimo-v2-flash",
     # Search / nothinking 变体（MiMo 无联网/思考概念，映射到同一基础模型）
-    "claude-opus-4-6-search": "mimo-v2-pro",
-    "claude-sonnet-4-6-search": "mimo-v2-flash",
+    "claude-opus-4-6-search": "mimo-v2.5-pro",
+    "claude-sonnet-4-6-search": "mimo-v2-pro",
     "claude-sonnet-4-6-nothinking": "mimo-v2-flash",
     "claude-haiku-4-5-nothinking": "mimo-v2-flash",
 }
