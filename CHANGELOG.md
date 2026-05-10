@@ -2,6 +2,11 @@
 
 本文件记录 MiMo2API 的所有重要变更。
 
+## [v2.2.3] — 2026-05-11
+
+### Fixed
+- **工具标签泄漏补全** — `clean_tool_text` 覆盖所有文本输出路径（流式/非流式、OpenAI/Anthropic），新增 `_clean_response_text()` 合并清洗函数。MiMo 原生 `<tool_call>` / `<function=` / `<parameter=` / `<invoke>` 格式全部兜底清理
+
 ## [v2.2.2] — 2026-05-11
 
 ### Fixed
