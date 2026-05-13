@@ -30,7 +30,11 @@ class StreamSieve:
         "<function=",
         "[调用工具:",
         "<|MiMoML|tool_calls>",
+        "<｜MiMoML｜tool_calls>",
+        "<|MiMoML|function_calls>",
+        "<｜MiMoML｜function_calls>",
         "<tool_calls>",
+        "<function_calls>",
     ]
 
     def __init__(

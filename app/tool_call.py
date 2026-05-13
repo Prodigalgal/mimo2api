@@ -197,7 +197,7 @@ def extract_tool_call(
         return tc, clean_tool_text(text)
 
     # 无工具调用：若含 MiMoML / 工具标记残留，仍清理再返回
-    if _MIMOML_KEYWORD in text.lower() or _has_tool_markers(text):
+    if _has_ml_keyword(text.lower()) or _has_tool_markers(text):
         return None, clean_tool_text(text)
     return None, text
 
@@ -235,15 +235,18 @@ def _extract_mimoml_tool_call(
                    "</mimoml-tool_calls>" in text.lower() or
                    "</tool_calls>" in text.lower())
     has_opening = ("<|MiMoML|tool_calls" in text.replace(' ', '').replace('｜','|').replace('||','|') or
+                   "<|MiMoML|function_calls" in text.replace(' ', '').replace('｜','|').replace('||','|') or
                    "<mimoml-tool_calls" in text.lower() or
-                   "<tool_calls>" in text.lower())
+                   "<mimoml-function_calls" in text.lower() or
+                   "<tool_calls>" in text.lower() or
+                   "<function_calls>" in text.lower())
     if has_closing and not has_opening:
         text = "<|MiMoML|tool_calls>\n" + text
 
     normalized = strip_mimoml(text)
     tool_calls = []
 
-    tc_pattern = re.compile(r"<tool_calls>(.*?)</tool_calls>", re.DOTALL | re.IGNORECASE)
+    tc_pattern = re.compile(r"<(?:tool_calls|function_calls)>(.*?)</(?:tool_calls|function_calls)>", re.DOTALL | re.IGNORECASE)
     tc_single = re.compile(r"<tool_call>(.*?)</tool_call>", re.DOTALL | re.IGNORECASE)
 
     blocks = [(m.group(1), m.start(), m.end()) for m in tc_pattern.finditer(normalized)]
@@ -253,7 +256,7 @@ def _extract_mimoml_tool_call(
     # 也处理裸 <invoke>（无 <tool_calls> 包裹），模型有时省略外层
     if not blocks:
         invoke_bare = re.compile(
-            r"<invoke\s+name=[\"']([^\"']+)[\"']>(.*?)</invoke>",
+            r"<invoke\s*name=[\"']([^\"']+)[\"']>(.*?)</invoke>",
             re.DOTALL | re.IGNORECASE,
         )
         for m in invoke_bare.finditer(normalized):
@@ -269,7 +272,7 @@ def _extract_mimoml_tool_call(
 
     for block_text, _, _ in blocks:
         invoke_pattern = re.compile(
-            r"<invoke\s+name=[\"']([^\"']+)[\"']>(.*?)</invoke>",
+            r"<invoke\s*name=[\"']([^\"']+)[\"']>(.*?)</invoke>",
             re.DOTALL | re.IGNORECASE,
         )
         for m in invoke_pattern.finditer(block_text):
@@ -782,6 +785,14 @@ def _is_inside_think(text: str, pos: int) -> bool:
 _MIMOML_NOISE_CHARS = set("|｜ \t\r\n")
 _MIMOML_KEYWORD = "mimoml"
 _MIMOML_KEYWORD_LEN = len(_MIMOML_KEYWORD)
+# DSML 变体（模型有时用 DSML 替代 MiMoML）
+_DSML_KEYWORD = "dsml"
+_DSML_KEYWORD_LEN = len(_DSML_KEYWORD)
+
+# 检测文本是否含任一 ML 关键字
+def _has_ml_keyword(text: str) -> bool:
+    t = text.lower()
+    return _MIMOML_KEYWORD in t or _DSML_KEYWORD in t or "function_calls" in t
 
 # 连字符变体：mimoml-tool_calls → tool_calls
 _MIMOML_HYPHENATED = {
@@ -791,7 +802,7 @@ _MIMOML_HYPHENATED = {
     "mimoml-parameter": "parameter",
 }
 
-_MIMOML_TAG_NAMES = {"tool_calls", "invoke", "parameter"}
+_MIMOML_TAG_NAMES = {"tool_calls", "function_calls", "invoke", "parameter"}
 _CDATA_OPEN = "<![CDATA["
 _CDATA_CLOSE = "]]>"
 
