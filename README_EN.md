@@ -105,6 +105,25 @@ chmod +x deploy.sh
 
 After deployment, the service starts in **foreground**. See [Management Commands](#management-commands) below for background running.
 
+### Docker
+
+```bash
+docker run -d -p 8080:8080 -v $(pwd)/config.json:/app/config.json ghcr.io/fly143/mimo2api:latest
+```
+
+Or with docker-compose:
+
+```yaml
+services:
+  mimo2api:
+    image: ghcr.io/fly143/mimo2api:latest
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./config.json:/app/config.json
+    restart: unless-stopped
+```
+
 > 💡 **No tools needed or need TTS?** Clone the [`no-tools` branch](https://github.com/Fly143/MiMo2API/tree/no-tools) for a cleaner pure chat edition (no prompt injection, higher output quality), with full TTS synthesis included.
 
 ### Manual Install
