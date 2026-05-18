@@ -371,6 +371,7 @@ async def upload_media_to_mimo(
 def build_query_from_messages(
     messages: list,
     tools: list = None,
+    passthrough: bool = False,
 ) -> str:
     """从消息列表构建查询字符串。
 
@@ -378,6 +379,7 @@ def build_query_from_messages(
     MiMo API 没有 system/user 角色分离，query 是纯文本拼接。
     工具提示词嵌入 system 消息一次，不再每轮重复注入。
     无 system 消息但有 tools 时自动补 system。
+    passthrough=True 时跳过 MiMoML 格式说明书，直接嵌入原始工具定义。
     """
     from .tool_call import build_tool_prompt
 
@@ -418,7 +420,7 @@ def build_query_from_messages(
 
     # 工具提示词嵌入 system 消息（一次，不再每轮重复追加末尾）
     if tools:
-        tool_prompt = build_tool_prompt(tools)
+        tool_prompt = build_tool_prompt(tools, passthrough=passthrough)
         if tool_prompt:
             if system_text:
                 system_text = system_text + "\n\n" + tool_prompt

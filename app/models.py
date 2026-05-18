@@ -28,6 +28,7 @@ class OpenAIRequest(BaseModel):
     reasoning_effort: Optional[str] = Field(None, description="深度思考等级: low/medium/high")
     tools: Optional[List[OpenAITool]] = None
     tool_choice: Optional[Any] = None
+    passthrough: bool = False
 
 
 class OpenAIDelta(BaseModel):

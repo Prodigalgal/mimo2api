@@ -29,6 +29,7 @@ class Config:
     api_keys: str = "sk-default"
     mimo_accounts: List[MimoAccount] = None
     models: List[str] = None  # 自定义模型列表，None 表示自动探测
+    tools_passthrough: bool = False  # 全局工具透传模式
 
     def __post_init__(self):
         if self.mimo_accounts is None:
@@ -40,6 +41,7 @@ class Config:
         d = {
             "api_keys": self.api_keys,
             "mimo_accounts": [acc.to_dict() for acc in self.mimo_accounts],
+            "tools_passthrough": self.tools_passthrough,
         }
         if self.models:
             d["models"] = self.models
@@ -53,6 +55,7 @@ class Config:
                 {k: v for k, v in acc.to_dict().items() if k != "token_masked"}
                 for acc in self.mimo_accounts
             ],
+            "tools_passthrough": self.tools_passthrough,
         }
         if self.models:
             d["models"] = self.models
@@ -125,7 +128,8 @@ class ConfigManager:
             self.config = Config(
                 api_keys=new_config.get('api_keys', 'sk-default'),
                 mimo_accounts=accounts,
-                models=new_config.get('models', [])
+                models=new_config.get('models', []),
+                tools_passthrough=new_config.get('tools_passthrough', False)
             )
             self.save()
 

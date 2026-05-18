@@ -41,10 +41,28 @@ def _safe_get(d: Any, key: str, default: Any = None) -> Any:
 
 # ─── 构建工具提示词 ──────────────────────────────────────────
 
-def build_tool_prompt(tools: List[Dict[str, Any]]) -> str:
-    """构建 MiMoML 工具提示词，动态提取客户端 tools 的名称和描述。"""
+def build_tool_prompt(tools: List[Dict[str, Any]], passthrough: bool = False) -> str:
+    """构建 MiMoML 工具提示词，动态提取客户端 tools 的名称和描述。
+
+    passthrough=True 时跳过格式说明书，直接嵌入原始工具定义 JSON，
+    适合 Roo Code / Cline 等自带工具定义的客户端，减少格式冲突。
+    """
     if not tools:
         return ""
+
+    if passthrough:
+        # 透传模式：跳过冗长的 MiMoML 格式说明书，直接嵌入原始工具定义
+        # 用更简洁的指令让模型自己决定用什么格式输出工具调用
+        import json
+        tools_json = json.dumps(tools, indent=2, ensure_ascii=False)
+        return (
+            "You have the following tools available. "
+            "Use your native tool-calling format when you need to invoke one.\n\n"
+            f"<tools>\n{tools_json}\n</tools>\n\n"
+            "When you use a tool, use whatever tool call format you normally use "
+            "(TOOL_CALL:, <|MiMoML|tool_calls>, or the standard format you prefer)."
+        )
+
 
     prompt = """TOOL CALL FORMAT — FOLLOW EXACTLY:
 

@@ -427,7 +427,8 @@ async def chat_completions(
                 multi_medias.append(media_obj)
 
     # 构建查询
-    query = build_query_from_messages(request.messages, tools=tools_dict)
+    passthrough_mode = request.passthrough or config_manager.config.tools_passthrough
+    query = build_query_from_messages(request.messages, tools=tools_dict, passthrough=passthrough_mode)
 
     thinking = bool(request.reasoning_effort)
     client = MimoClient(account)
@@ -442,7 +443,7 @@ async def chat_completions(
     # 流式响应
     if request.stream:
         return StreamingResponse(
-            _stream_response(client, query, thinking, effective_model, tools_dict, multi_medias,
+            _stream_response(client, query, thinking, effective_model, tools_dict, multi_medias, passthrough=passthrough_mode,
                              conv_id=conv_id, account_id=account.user_id),
             media_type="text/event-stream",
             headers={
@@ -513,6 +514,7 @@ async def chat_completions(
 async def _stream_response(
     client: MimoClient, query: str, thinking: bool, model: str,
     tools: list = None, multi_medias: list = None,
+    passthrough: bool = False,
     conv_id: str = None, account_id: str = None,
 ):
     """流式响应生成器。

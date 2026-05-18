@@ -7,10 +7,10 @@
       "requests": 9
     },
     "mimo-v2.5-pro": {
-      "prompt_tokens": 23140,
-      "completion_tokens": 254,
-      "total_tokens": 23394,
-      "requests": 6
+      "prompt_tokens": 30680,
+      "completion_tokens": 425,
+      "total_tokens": 31105,
+      "requests": 8
     },
     "mimo-v2-flash": {
       "prompt_tokens": 19202,
@@ -32,10 +32,10 @@
     }
   },
   "total": {
-    "prompt_tokens": 76147,
-    "completion_tokens": 40222,
-    "total_tokens": 116369,
-    "requests": 59
+    "prompt_tokens": 83687,
+    "completion_tokens": 40393,
+    "total_tokens": 124080,
+    "requests": 61
   },
   "daily": {
     "2026-05-03": {
@@ -103,6 +103,14 @@
         "prompt_tokens": 10230,
         "completion_tokens": 110,
         "total_tokens": 10340,
+        "requests": 2
+      }
+    },
+    "2026-05-18": {
+      "mimo-v2.5-pro": {
+        "prompt_tokens": 7540,
+        "completion_tokens": 171,
+        "total_tokens": 7711,
         "requests": 2
       }
     }
