@@ -87,7 +87,8 @@ class ConfigManager:
                 self.config = Config(
                     api_keys=data.get('api_keys', 'sk-default'),
                     mimo_accounts=accounts,
-                    models=data.get('models', [])
+                    models=data.get('models', []),
+                    tools_passthrough=data.get('tools_passthrough', False)
                 )
         except Exception as e:
             print(f"加载配置失败: {e}")
