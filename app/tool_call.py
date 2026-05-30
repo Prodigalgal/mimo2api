@@ -316,6 +316,35 @@ def _extract_mimoml_tool_call(
             if tc:
                 tool_calls.append(tc)
 
+        # Fallback: invokes without closing </invoke> (model bug — MiMo sometimes omits closing tags)
+        if not tool_calls:
+            # Match <invoke name="X">... up to next <invoke, </tool_calls>, or end
+            invoke_open = re.compile(
+                r"<invoke\s*name=[\"']([^\"']+)[\"'][^>]*>",
+                re.IGNORECASE,
+            )
+            open_matches = list(invoke_open.finditer(block_text))
+            for i, m in enumerate(open_matches):
+                name = m.group(1).strip()
+                if not name:
+                    continue  # 跳过空 name 的 invoke
+                start = m.end()
+                # 找到下一个 <invoke 或 </tool_calls> 或文本末尾
+                end = len(block_text)
+                next_invoke = re.search(r"<invoke\s*name=", block_text[start:], re.IGNORECASE)
+                close_tc = block_text.find("</tool_calls>", start)
+                if next_invoke:
+                    end = start + next_invoke.start()
+                if close_tc != -1 and close_tc < end:
+                    end = close_tc
+                inner = block_text[start:end]
+                args = _parse_mimoml_parameters(inner)
+                resolved = _resolve_tool_name(name, tool_names)
+                if resolved:
+                    tc = normalize_tool_call({"name": resolved, "arguments": args})
+                    if tc:
+                        tool_calls.append(tc)
+
     return tool_calls if tool_calls else None
 
 
@@ -652,11 +681,13 @@ def clean_tool_text(text: str) -> str:
     )
     # <function_call> / <function_calls> 标签
     text = re.sub(r"</?function_calls?>", "", text)
-    # MiMoML 标签残留
+    # MiMoML 标签残留（修复 \\| → \| 使正则正确匹配 MiMoML 标签）
     text = re.sub(r"</?\|MiMoML\|[^>]*>", "", text)
     text = re.sub(r"<tool_calls?>.*?</tool_calls?>", "", text, flags=re.DOTALL | re.IGNORECASE)
-    text = re.sub(r"<invoke[^>]*>.*?</invoke>", "", text, flags=re.DOTALL | re.IGNORECASE)
-    text = re.sub(r"<parameter[^>]*>.*?</parameter>", "", text, flags=re.DOTALL | re.IGNORECASE)
+    # 同时匹配 <invoke> 和 <|MiMoML|invoke> 两种形式
+    text = re.sub(r"<(?:[|]MiMoML[|])?invoke[^>]*>.*?</(?:[|]MiMoML[|])?invoke>", "", text, flags=re.DOTALL | re.IGNORECASE)
+    # 同时匹配 <parameter> 和 <|MiMoML|parameter> 两种形式
+    text = re.sub(r"<(?:[|]MiMoML[|])?parameter[^>]*>.*?</(?:[|]MiMoML[|])?parameter>", "", text, flags=re.DOTALL | re.IGNORECASE)
     text = re.sub(r"<!\[CDATA\[.*?\]\]>", "", text, flags=re.DOTALL)
     # <tool_call>...</tool_call>
     text = re.sub(
