@@ -636,7 +636,7 @@ async def _stream_response(
 
             if collected_tool_calls:
                 # 有工具调用 → 不发 content，只发 tool_calls
-                streaming_tc = [{**tc, "index": 0} for tc in collected_tool_calls]
+                streaming_tc = [{**tc, "index": i} for i, tc in enumerate(collected_tool_calls)]
                 yield _build_chunk(msg_id, model, created=created_t,
                                    tool_calls=streaming_tc, finish_reason="tool_calls")
                 yield "data: [DONE]\n\n"
