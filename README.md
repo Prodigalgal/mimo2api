@@ -41,7 +41,6 @@
 - [ASR 语音识别](#asr-语音识别)
 - [Responses API 详解](#responses-api-详解)
 - [工具调用详解](#工具调用详解)
-- [无工具分支 (no-tools)](#无工具分支-no-tools)
 - [管理命令](#管理命令)
 - [项目结构](#项目结构)
 - [配置参考](#配置参考)
@@ -64,7 +63,6 @@
 - **CORS 全开** — 允许任意来源跨域访问
 - **TTS 语音合成** — 兼容 OpenAI `/v1/audio/speech` 接口，支持冰糖/茉莉/白桦/苏打/Mia/Chloe 6 种音色，支持 voicedesign 自定义音色和 voiceclone 声音克隆
 - **ASR 语音识别** — 兼容 OpenAI Whisper `/v1/audio/transcriptions` 接口，支持自动语言检测，上传音频即可转文字
-- **无工具分支** — 提供 `no-tools` 分支，移除工具调用逻辑，适合纯对话场景，输出质量更高
 
 ## 架构
 
@@ -511,7 +509,7 @@ curl -X POST http://localhost:8080/v1/messages \
 }
 ```
 
-> **注意：** MiMo 的工具调用基于文本 TOOL_CALL 格式模拟，非原生 function calling。`no-tools` 分支不含工具调用支持。
+> **注意：** MiMo 的工具调用基于文本 TOOL_CALL 格式模拟，非原生 function calling。
 
 ## TTS 语音合成
 
@@ -778,51 +776,6 @@ MiMo API 本身**不支持** OpenAI function calling 格式。本代理通过**M
 - **工具调用** → 缓冲至流结束后解析，然后作为 `tool_calls` 一次性输出
 
 非筛分模式（无工具流、非流）不受影响，保持原有逻辑。筛选检测支持三种格式：`TOOL_CALL:`、`<tool_call>`、`<function=`，同时白名单排除 `<think>` 深度思考标签。
-
-## 无工具分支 (no-tools)
-
-### 为什么注入太多 Prompt 会让模型变笨
-
-工具调用（Function Calling）的实现方式是**将工具定义以文本形式注入到 system/user 消息中**。这带来不可忽视的副作用：
-
-**每注入一个工具定义，就消耗一部分模型的"注意力预算"。**
-
-具体影响：
-
-- **注意力稀释** — 大量工具描述占据上下文，模型分配到用户实际问题的注意力比例下降，回答质量明显变差
-- **格式过拟合** — 模型过度关注 `TOOL_CALL` 输出格式，在不需要调用工具的纯对话中也可能产生格式残留或奇怪的输出
-- **混淆增加** — 工具名称、参数描述与正常对话内容混在一起，增加了模型混淆的概率，尤其是参数较多的工具
-- **Token 浪费** — 工具 prompt 每次请求都占用 token，既浪费上下文窗口又增加上游处理时间，而大部分对话根本不需要工具
-
-**简单说：prompt 越多，模型越容易"分心"，回答质量越差。**
-
-### 无工具分支
-
-如果你的使用场景**不需要**工具调用（纯对话、写作、翻译、代码生成、问答等），强烈建议使用 `no-tools` 分支：
-
-```bash
-# 克隆无工具版本
-git clone -b no-tools https://github.com/Fly143/MiMo2API.git
-```
-
-`no-tools` 分支与 `main` 分支的区别：
-
-| | main | no-tools |
-|---|---|---|
-| 工具 prompt 注入 | ✅ 每次请求注入工具描述 | ❌ 不注入任何 prompt |
-| 工具提取解析 | ✅ 5 种策略提取 TOOL_CALL | ❌ 不解析 |
-| 响应清理 | ✅ 清理工具残留文本 | ❌ 不需要 |
-| Responses API | ✅ `/v1/responses`（含工具调用） | ✅ `/v1/responses`（纯对话） |
-| Anthropic API | ✅ `/v1/messages`（含工具调用） | ✅ `/v1/messages`（纯对话） |
-| 多模态 | ✅ | ✅ |
-| 文件上传（.md/.txt） | ✅ | ✅ |
-| 深度思考 | ✅ | ✅ |
-| 多账号 | ✅ | ✅ |
-| 模型发现 | ✅ | ✅ |
-| TTS 语音合成 | ✅ `/v1/audio/speech` | ✅ `/v1/audio/speech` |
-| ASR 语音识别 | ✅ `/v1/audio/transcriptions` | ✅ `/v1/audio/transcriptions` |
-
-**效果：** 上下文更干净，模型注意力完全集中在用户问题上，回答更专注、质量更高，代码也更简洁。对于大多数日常使用场景，无工具分支是更好的选择。
 
 ## Responses API 详解
 
