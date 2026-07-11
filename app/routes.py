@@ -843,7 +843,7 @@ async def _tts_generate(
             mime_part = voice_name.split(";")[0].replace("data:", "", 1)
             if mime_part:
                 mime_type = mime_part
-        uploaded = await upload_media_to_mimo(voice_name, mime_type, acct, model="mimo-v2-omni")
+        uploaded = await upload_media_to_mimo(voice_name, mime_type, acct, model="mimo-v2.5")
         if not uploaded or not uploaded.get("fileUrl"):
             raise HTTPException(status_code=502, detail={"error": {"message": "voiceclone audio upload failed"}})
         audio_config = {"format": "wav", "voice": uploaded["fileUrl"]}

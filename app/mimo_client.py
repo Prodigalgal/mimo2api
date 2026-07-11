@@ -49,7 +49,7 @@ class MimoClient:
             "xiaomichatbot_ph": self.account.xiaomichatbot_ph,
         }
 
-    def _create_request_body(self, query: str, thinking: bool, model: str = "mimo-v2-pro", multi_medias: list = None, attachments: list = None, conversation_id: str = None) -> dict:
+    def _create_request_body(self, query: str, thinking: bool, model: str = "mimo-v2.5-pro", multi_medias: list = None, attachments: list = None, conversation_id: str = None) -> dict:
         """创建请求体"""
         return {
             "msgId": uuid.uuid4().hex[:32],
@@ -66,7 +66,7 @@ class MimoClient:
             "attachments": attachments or []
         }
 
-    async def call_api(self, query: str, thinking: bool = False, model: str = "mimo-v2-pro", multi_medias: list = None, attachments: list = None, conversation_id: str = None) -> Tuple[str, str, dict]:
+    async def call_api(self, query: str, thinking: bool = False, model: str = "mimo-v2.5-pro", multi_medias: list = None, attachments: list = None, conversation_id: str = None) -> Tuple[str, str, dict]:
         """
         调用Mimo API（非流式）
 
@@ -122,7 +122,7 @@ class MimoClient:
 
             return content, think_content, usage
 
-    async def stream_api(self, query: str, thinking: bool = False, model: str = "mimo-v2-pro", multi_medias: list = None, attachments: list = None, conversation_id: str = None) -> AsyncIterator[dict]:
+    async def stream_api(self, query: str, thinking: bool = False, model: str = "mimo-v2.5-pro", multi_medias: list = None, attachments: list = None, conversation_id: str = None) -> AsyncIterator[dict]:
         """
         调用Mimo API（流式）
 

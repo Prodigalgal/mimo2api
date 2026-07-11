@@ -61,27 +61,28 @@ router = APIRouter()
 # ── Anthropic 模型名 → MiMo 内部模型名映射 ──
 # Claude Code CLI 等工具期望 Anthropic 风格的模型名，MiMo 原生名不兼容。
 # 此映射表在 Anthropic 端点请求时自动转换。
+# ⚠️ 仅映射到 2.5 系列，使用旧版模型可能导致账号被封禁。
 ANTHROPIC_MODEL_ALIASES = {
     # Claude 4.x 当前
     "claude-opus-4-6": "mimo-v2.5-pro",
-    "claude-sonnet-4-6": "mimo-v2-pro",
-    "claude-haiku-4-5": "mimo-v2-flash",
+    "claude-sonnet-4-6": "mimo-v2.5",
+    "claude-haiku-4-5": "mimo-v2.5",
     # Claude 4.x 历史
-    "claude-sonnet-4-5": "mimo-v2-pro",
+    "claude-sonnet-4-5": "mimo-v2.5",
     "claude-opus-4-1": "mimo-v2.5-pro",
     "claude-opus-4-0": "mimo-v2.5-pro",
-    "claude-sonnet-4-0": "mimo-v2-flash",
+    "claude-sonnet-4-0": "mimo-v2.5",
     # Claude 3.x
-    "claude-3-7-sonnet": "mimo-v2-pro",
-    "claude-3-5-sonnet": "mimo-v2-flash",
-    "claude-3-opus": "mimo-v2.5",
-    "claude-3-sonnet": "mimo-v2-flash",
-    "claude-3-haiku": "mimo-v2-flash",
+    "claude-3-7-sonnet": "mimo-v2.5",
+    "claude-3-5-sonnet": "mimo-v2.5",
+    "claude-3-opus": "mimo-v2.5-pro",
+    "claude-3-sonnet": "mimo-v2.5",
+    "claude-3-haiku": "mimo-v2.5",
     # Search / nothinking 变体（MiMo 无联网/思考概念，映射到同一基础模型）
     "claude-opus-4-6-search": "mimo-v2.5-pro",
-    "claude-sonnet-4-6-search": "mimo-v2-pro",
-    "claude-sonnet-4-6-nothinking": "mimo-v2-flash",
-    "claude-haiku-4-5-nothinking": "mimo-v2-flash",
+    "claude-sonnet-4-6-search": "mimo-v2.5",
+    "claude-sonnet-4-6-nothinking": "mimo-v2.5",
+    "claude-haiku-4-5-nothinking": "mimo-v2.5",
 }
 
 
@@ -406,7 +407,7 @@ async def anthropic_messages(
 
     body = await request.json()
     stream = body.get("stream", False)
-    model = body.get("model", "mimo-v2-flash")
+    model = body.get("model", "mimo-v2.5")
     model = _resolve_anthropic_model(model)  # Anthropic 别名映射
     msg_id = _make_msg_id()
 
@@ -625,7 +626,7 @@ async def anthropic_create_batch_ep(request: Request):
     """创建批量任务。"""
     body = await request.json()
     requests_data = body.get("requests", [])
-    model = body.get("model", "mimo-v2-flash")
+    model = body.get("model", "mimo-v2.5")
     model = _resolve_anthropic_model(model)  # Anthropic 别名映射
     batch = _anthropic_create_batch(requests_data, model)
 

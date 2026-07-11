@@ -11,7 +11,7 @@ Convert **Xiaomi MiMo AI Studio** web chat into an **OpenAI-compatible API**, wi
 
 > 📖 [中文版本](README.md)
 
-> **💡 Need pure chat or TTS?** Use the [`no-tools` branch](#no-tools-branch) — no tool prompt injection, cleaner context, higher output quality, with full TTS synthesis support.
+> **💡 TTS speech synthesis and ASR speech recognition are now merged into the main branch!** Use the `main` branch for full functionality.
 
 ## Table of Contents
 
@@ -34,9 +34,10 @@ Convert **Xiaomi MiMo AI Studio** web chat into an **OpenAI-compatible API**, wi
   - [Deep Thinking](#7-deep-thinking)
   - [Model Discovery & Refresh](#8-model-discovery--refresh)
 - [Anthropic Messages API](#9-anthropic-messages-api)
+- [TTS Speech Synthesis](#tts-speech-synthesis)
+- [ASR Speech Recognition](#asr-speech-recognition)
 - [Responses API](#responses-api)
 - [Tool Calling Details](#tool-calling-details)
-- [No-Tools Branch](#no-tools-branch)
 - [Management Commands](#management-commands)
 - [Project Structure](#project-structure)
 - [Configuration Reference](#configuration-reference)
@@ -57,7 +58,8 @@ Convert **Xiaomi MiMo AI Studio** web chat into an **OpenAI-compatible API**, wi
 - **Dynamic Model Discovery** — Real-time model list fetched from MiMo official API at startup, no manual maintenance
 - **Credential Management** — Support for Cookie import and cURL import configuration methods
 - **CORS Fully Open** — Cross-origin access from any source
-- **No-Tools Branch** — Dedicated `no-tools` branch with tool calling logic removed, ideal for pure chat scenarios with higher output quality
+- **TTS Speech Synthesis** — Compatible with OpenAI `/v1/audio/speech` endpoint, supports 8 preset voices, voicedesign custom voice, and voiceclone voice cloning
+- **ASR Speech Recognition** — Compatible with OpenAI Whisper `/v1/audio/transcriptions` endpoint, supports Chinese/English and dialect recognition with automatic language detection
 
 ## Architecture
 
@@ -124,7 +126,7 @@ services:
     restart: unless-stopped
 ```
 
-> 💡 **No tools needed or need TTS?** Clone the [`no-tools` branch](https://github.com/Fly143/MiMo2API/tree/no-tools) for a cleaner pure chat edition (no prompt injection, higher output quality), with full TTS synthesis included.
+> 💡 **TTS and ASR are now in main branch!**
 
 ### Manual Install
 
@@ -194,7 +196,7 @@ curl http://localhost:8080/v1/chat/completions \
   -H "Authorization: Bearer sk-mimo" \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "mimo-v2-flash",
+    "model": "mimo-v2.5",
     "messages": [
       {"role": "user", "content": "Hello, please reply in Chinese"}
     ]
@@ -208,7 +210,7 @@ curl http://localhost:8080/v1/chat/completions \
   -H "Authorization: Bearer sk-mimo" \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "mimo-v2-flash",
+    "model": "mimo-v2.5",
     "messages": [
       {"role": "user", "content": "Tell me a story"}
     ],
@@ -228,7 +230,7 @@ curl http://localhost:8080/v1/chat/completions \
   -H "Authorization: Bearer sk-mimo" \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "mimo-v2-omni",
+    "model": "mimo-v2.5",
     "messages": [{
       "role": "user",
       "content": [
@@ -245,7 +247,7 @@ curl http://localhost:8080/v1/chat/completions \
   -H "Authorization: Bearer sk-mimo" \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "mimo-v2-omni",
+    "model": "mimo-v2.5",
     "messages": [{
       "role": "user",
       "content": [
@@ -270,7 +272,7 @@ curl http://localhost:8080/v1/chat/completions \
   -H "Authorization: Bearer sk-mimo" \
   -H "Content-Type: application/json" \
   -d "{
-    \"model\": \"mimo-v2-pro\",
+    \"model\": \"mimo-v2.5-pro\",
     \"messages\": [{
       \"role\": \"user\",
       \"content\": [
@@ -290,7 +292,7 @@ curl http://localhost:8080/v1/chat/completions \
   -H "Authorization: Bearer sk-mimo" \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "mimo-v2-pro",
+    "model": "mimo-v2.5-pro",
     "messages": [
       {"role": "user", "content": "What is the weather in Beijing today?"}
     ],
@@ -343,7 +345,7 @@ curl http://localhost:8080/v1/chat/completions \
   -H "Authorization: Bearer sk-mimo" \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "mimo-v2-pro",
+    "model": "mimo-v2.5-pro",
     "messages": [
       {"role": "user", "content": "Prove that sqrt(2) is irrational"}
     ],
@@ -373,7 +375,7 @@ curl http://localhost:8080/v1/responses \
   -H "Authorization: Bearer sk-mimo" \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "mimo-v2-pro",
+    "model": "mimo-v2.5-pro",
     "input": [
       {"role": "user", "content": "Hello"}
     ]
@@ -393,7 +395,7 @@ curl -X POST http://localhost:8080/v1/messages \
   -H "Content-Type: application/json" \
   -H "anthropic-version: 2023-06-01" \
   -d '{
-    "model": "mimo-v2-flash",
+    "model": "mimo-v2.5",
     "max_tokens": 1024,
     "messages": [
       {"role": "user", "content": "Hello"}
@@ -406,7 +408,7 @@ curl -N -X POST http://localhost:8080/v1/messages \
   -H "Content-Type: application/json" \
   -H "anthropic-version: 2023-06-01" \
   -d '{
-    "model": "mimo-v2-flash",
+    "model": "mimo-v2.5",
     "max_tokens": 1024,
     "stream": true,
     "messages": [
@@ -436,13 +438,21 @@ Tools like Claude Code CLI expect Anthropic-style model names and cannot directl
 | Claude Model | → MiMo Internal |
 |---|---|
 | `claude-opus-4-6` | `mimo-v2.5-pro` |
-| `claude-sonnet-4-6` | `mimo-v2-pro` |
-| `claude-haiku-4-5` | `mimo-v2-flash` |
-| `claude-3-7-sonnet` | `mimo-v2-pro` |
-| `claude-3-5-sonnet` | `mimo-v2-flash` |
-| `claude-3-opus` | `mimo-v2.5` |
+| `claude-sonnet-4-6` | `mimo-v2.5` |
+| `claude-haiku-4-5` | `mimo-v2.5` |
+| `claude-sonnet-4-5` | `mimo-v2.5` |
+| `claude-opus-4-1` | `mimo-v2.5-pro` |
+| `claude-opus-4-0` | `mimo-v2.5-pro` |
+| `claude-sonnet-4-0` | `mimo-v2.5` |
+| `claude-3-7-sonnet` | `mimo-v2.5` |
+| `claude-3-5-sonnet` | `mimo-v2.5` |
+| `claude-3-opus` | `mimo-v2.5-pro` |
+| `claude-3-sonnet` | `mimo-v2.5` |
+| `claude-3-haiku` | `mimo-v2.5` |
 
-Also supports search/nothinking variants and Claude 4.x legacy names. MiMo native names (`mimo-*`) continue to work directly; `/v1/models` output is unchanged, not affecting other software.
+> ⚠️ **Important:** It is recommended to use **2.5 series models**. MiMo web version only provides 2.5 series; using other legacy models may result in account suspension.
+
+Also supports search/nothinking variants. MiMo native names (`mimo-*`) continue to work directly; `/v1/models` output is unchanged, not affecting other software.
 
 ### Authentication
 
@@ -481,7 +491,7 @@ curl -X POST http://localhost:8080/v1/messages \
   -H "Content-Type: application/json" \
   -H "anthropic-version: 2023-06-01" \
   -d '{
-    "model": "mimo-v2-flash",
+    "model": "mimo-v2.5",
     "max_tokens": 1024,
     "messages": [
       {"role": "user", "content": "What time is it?"}
@@ -505,7 +515,7 @@ Returns Anthropic-format `tool_use` blocks:
 }
 ```
 
-> **Note:** MiMo's tool calling is text-based TOOL_CALL format simulation, not native function calling. The `no-tools` branch does not include tool calling support.
+> **Note:** MiMo's tool calling is text-based TOOL_CALL format simulation, not native function calling.
 
 ## Tool Calling Details
 
@@ -555,50 +565,183 @@ When tool calling is active and `stream: true`, the `tool_sieve` engine scans th
 
 Non-sieve mode (no-tools streaming, non-streaming) is unaffected, maintaining the original logic. Detection supports three formats: `TOOL_CALL:`, `<tool_call>`, `<function=`, while whitelisting `<think>` deep thinking tags.
 
-## No-Tools Branch
 
-### Why Too Many Prompts Make Models Dumber
+## TTS Speech Synthesis
 
-Function Calling is implemented by **injecting tool definitions as text into system/user messages**. This has non-negligible side effects:
+Endpoint: `POST /v1/audio/speech` (OpenAI Compatible)
 
-**Every injected tool definition consumes part of the model's "attention budget."**
+Text-to-speech converts input text into natural, fluent speech output. Supports preset voices, voice design, voice cloning, and more.
 
-Specific impacts:
+> 📖 [Official Documentation](https://mimo.mi.com/docs/zh-CN/quick-start/usage-guide/audio/speech-synthesis-v2.5)
 
-- **Attention dilution** — Extensive tool descriptions occupy context, reducing the model's attention ratio for the user's actual question; answer quality noticeably degrades
-- **Format overfitting** — The model over-focuses on TOOL_CALL output format, potentially producing format artifacts or weird output even in pure conversations that don't need tools
-- **Increased confusion** — Tool names and parameter descriptions mixed with normal conversation content increase confusion probability, especially for tools with many parameters
-- **Token waste** — Tool prompts consume tokens on every request, wasting both context window and upstream processing time; most conversations never need tools at all
+### Supported Models
 
-**In short: more prompts → model more easily "distracted" → worse answer quality.**
+| Model ID | Function | Voice Source | Notes |
+|----------|----------|--------------|-------|
+| `mimo-v2.5-tts` | Use preset premium voices | Preset voice list | Supports singing mode, no voice design/clone |
+| `mimo-v2.5-tts-voicedesign` | Customize voice via text description | Auto-generated from text | No singing, preset voices, or voice clone |
+| `mimo-v2.5-tts-voiceclone` | Clone any voice from audio sample | Audio sample cloning | No singing, preset voices, or voice design |
 
-### The No-Tools Branch
-
-If your use case does **not** require tool calling (pure chat, writing, translation, code generation, Q&A, etc.), we strongly recommend the `no-tools` branch:
+### Basic Usage
 
 ```bash
-# Clone no-tools version
-git clone -b no-tools https://github.com/Fly143/MiMo2API.git
+curl -X POST http://localhost:8080/v1/audio/speech \
+  -H "Authorization: Bearer ***" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "mimo-v2.5-tts",
+    "input": "Hello, world!",
+    "voice": "alloy"
+  }' \
+  --output speech.wav
 ```
 
-Differences between `no-tools` and `main`:
+### Parameters
 
-| | main | no-tools |
-|---|---|---|
-| Tool prompt injection | ✅ Injects tool descriptions on every request | ❌ No prompt injection |
-| Tool extraction/parsing | ✅ 5 strategies for TOOL_CALL extraction | ❌ No parsing |
-| Response cleanup | ✅ Cleans tool residual text | ❌ Not needed |
-| Responses API | ✅ `/v1/responses` (with tool calling) | ✅ `/v1/responses` (pure chat) |
-| Anthropic API | ✅ `/v1/messages` (with tool calling) | ✅ `/v1/messages` (pure chat) |
-| Multimodal | ✅ | ✅ |
-| File upload (.md/.txt) | ✅ | ✅ |
-| Deep thinking | ✅ | ✅ |
-| Multi-account | ✅ | ✅ |
-| Model discovery | ✅ | ✅ |
-| TTS speech synthesis | ❌ Not included | ✅ `/v1/audio/speech` |
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| model | string | mimo-v2.5-tts | Model name |
+| input | string | (required) | Text to synthesize |
+| voice | string | alloy | Voice name (preset or base64 audio) |
+| speed | float | 1.0 | Speech rate (0.5-2.0) |
+| response_format | string | wav | Output format |
+| style | string | (empty) | Voice description for voicedesign model |
 
-**Result:** Cleaner context, model attention fully focused on the user's question, more focused and higher quality answers, and simpler code. For most daily use cases, the no-tools branch is the better choice.
+### Preset Voices
 
+Only `mimo-v2.5-tts` model supports preset voices.
+
+| OpenAI Voice | MiMo Voice ID | Language | Gender |
+|--------------|---------------|----------|--------|
+| alloy | BingTang | Chinese | Female |
+| echo | MoLi | Chinese | Female |
+| fable | BaiHua | Chinese | Male |
+| onyx | SuDa | Chinese | Male |
+| nova | Mia | English | Female |
+| shimmer | Chloe | English | Female |
+| - | Milo | English | Male |
+| - | Dean | English | Male |
+
+> 💡 You can also use MiMo native voice IDs (e.g., `mimo_default`) as the `voice` parameter.
+
+### Voice Design (voicedesign)
+
+Generate custom voice from text description, no reference audio needed:
+
+```bash
+curl -X POST http://localhost:8080/v1/audio/speech \
+  -H "Authorization: Bearer ***" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "mimo-v2.5-tts-voicedesign",
+    "input": "Hello, world!",
+    "voice": "alloy",
+    "style": "A gentle, sweet female voice, moderate speed"
+  }' \
+  --output speech.wav
+```
+
+### Voice Clone (voiceclone)
+
+Clone any voice from audio sample, `voice` parameter takes reference audio in base64:
+
+```bash
+curl -X POST http://localhost:8080/v1/audio/speech \
+  -H "Authorization: Bearer ***" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "mimo-v2.5-tts-voiceclone",
+    "input": "This is speech generated with cloned voice.",
+    "voice": "data:audio/wav;base64,UklGRi..."
+  }' \
+  --output speech.wav
+```
+
+### voicedesign vs voiceclone
+
+| Feature | voicedesign | voiceclone |
+|---------|-------------|------------|
+| Voice source | Text description | Audio sample |
+| Reference audio needed | No | Yes |
+| Control method | `style` parameter | `voice` parameter |
+| Use case | Quick style generation | Precise voice replication |
+
+---
+
+## ASR Speech Recognition
+
+Endpoint: `POST /v1/audio/transcriptions` (OpenAI Whisper Compatible)
+
+Speech recognition converts input audio into text output. Suitable for meeting transcription, lyrics recognition, dialect transcription, noisy recordings, and more.
+
+> 📖 [Official Documentation](https://mimo.mi.com/docs/zh-CN/quick-start/usage-guide/audio/Speech-Recognition)
+
+### Supported Model
+
+Currently only supports `mimo-v2.5-asr` model.
+
+### Core Capabilities
+
+- **Multi-language** — Chinese/English bilingual recognition with automatic language detection, native support for Cantonese, Wu, Minnan, Sichuan dialect
+- **High robustness** — Stable recognition in noisy, far-field, overlapping speech conditions; supports lyrics with accompaniment
+- **Precise recognition** — Accurately recognizes poetry, technical terms, names/places; auto-generates punctuation
+
+### Basic Usage
+
+```bash
+curl -X POST http://localhost:8080/v1/audio/transcriptions \
+  -H "Authorization: Bearer ***" \
+  -F "file=@audio.mp3" \
+  -F "language=auto"
+```
+
+Returns:
+
+```json
+{"text": "Recognized text content"}
+```
+
+### Parameters
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| file | file | (required) | Audio file (wav/mp3) |
+| model | string | mimo-v2.5-asr | Model name (optional) |
+| language | string | auto | Language code (auto/zh/en etc.) |
+| response_format | string | json | Response format: json or text |
+
+### Supported Audio Formats
+
+Supports `wav` and `mp3` format audio files. Base64 encoded string size limit is **10MB**.
+
+| Format | MIME Type |
+|--------|-----------|
+| wav | audio/wav |
+| mp3 | audio/mpeg |
+
+### Examples
+
+```bash
+# Recognize Chinese audio
+curl -X POST http://localhost:8080/v1/audio/transcriptions \
+  -H "Authorization: Bearer ***" \
+  -F "file=@meeting.wav" \
+  -F "language=zh"
+
+# Recognize English audio
+curl -X POST http://localhost:8080/v1/audio/transcriptions \
+  -H "Authorization: Bearer ***" \
+  -F "file=@speech.mp3" \
+  -F "language=en"
+
+# Auto-detect language
+curl -X POST http://localhost:8080/v1/audio/transcriptions \
+  -H "Authorization: Bearer ***" \
+  -F "file=@audio.wav" \
+  -F "language=auto"
+```
+
+---
 ## Responses API
 
 Endpoint: `POST /v1/responses`
@@ -625,7 +768,7 @@ curl http://localhost:8080/v1/responses \
   -H "Authorization: Bearer sk-mimo" \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "mimo-v2-pro",
+    "model": "mimo-v2.5-pro",
     "input": [{"role": "user", "content": "Hello"}]
   }'
 
@@ -634,7 +777,7 @@ curl http://localhost:8080/v1/responses \
   -H "Authorization: Bearer sk-mimo" \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "mimo-v2-pro",
+    "model": "mimo-v2.5-pro",
     "input": [{"role": "user", "content": "Tell me a story"}],
     "stream": true
   }'
@@ -647,7 +790,7 @@ curl http://localhost:8080/v1/responses \
   -H "Authorization: Bearer sk-mimo" \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "mimo-v2-pro",
+    "model": "mimo-v2.5-pro",
     "input": [{"role": "user", "content": "What time is it?"}],
     "tools": [{
       "type": "function",
@@ -802,8 +945,8 @@ pip install -r requirements.txt
 
 | Limitation | Description |
 |------------|-------------|
-| Token validity & silent downgrade | serviceToken expires in ~24h. After expiry, basic chat (flash/pro) may still work, but **mimo-v2.5 / mimo-v2-omni multimodal vision** silently fails. Admin panel "Test Connection" only checks the normal chat endpoint and cannot detect this issue. Fix requires logging out and re-logging in via the web UI; see FAQ below |
-| Multimodal models | `mimo-v2.5` / `mimo-v2-omni` support vision; all models support file upload and image OCR text extraction |
+| Token validity & silent downgrade | serviceToken expires in ~24h. After expiry, basic chat (2.5 series) may still work, but **mimo-v2.5 multimodal vision** silently fails. Admin panel "Test Connection" only checks the normal chat endpoint and cannot detect this issue. Fix requires logging out and re-logging in via the web UI; see FAQ below |
+| Multimodal models | `mimo-v2.5` support vision; all models support file upload and image OCR text extraction |
 | Concurrency limit | Depends on MiMo server-side limits (typically 1-2 concurrent/account); multiple accounts help mitigate |
 | No Embeddings | Only Chat Completions and Responses endpoints implemented |
 | Non-streaming uses SSE internally | MiMo API only provides SSE streams; non-streaming requests buffer all SSE events then merge |
@@ -824,7 +967,7 @@ A: Usually caused by abnormal server-side session state; simply re-obtaining coo
 4. Re-import cookies in the admin panel
 If the account is restricted, switch to another account.
 
-**Q: mimo-v2.5 / mimo-v2-omni multimodal vision suddenly fails, but test connection shows OK?**
+**Q: mimo-v2.5 multimodal vision suddenly fails, but test connection shows OK?**
 A: This is the **silent downgrade** phenomenon after serviceToken expiry. MiMo API enforces stricter credential validation for multimodal vision than for regular chat. After token expiry:
 - Basic chat (flash/pro) may still work normally
 - Admin panel "Test Connection" also shows OK (it only checks the normal chat endpoint)
