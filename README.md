@@ -532,11 +532,15 @@ curl -X POST http://localhost:8080/v1/messages \
 ### 基本用法
 
 ```bash
-curl -X POST http://localhost:8080/v1/audio/speech   -H "Authorization: Bearer ***"   -H "Content-Type: application/json"   -d '{
+curl -X POST http://localhost:8080/v1/audio/speech \
+  -H "Authorization: Bearer ***" \
+  -H "Content-Type: application/json" \
+  -d '{
     "model": "mimo-v2.5-tts",
     "input": "你好，世界！",
     "voice": "alloy"
-  }'   --output speech.wav
+  }' \
+  --output speech.wav
 ```
 
 ### 参数
@@ -552,14 +556,20 @@ curl -X POST http://localhost:8080/v1/audio/speech   -H "Authorization: Bearer *
 
 ### 预置音色
 
-| OpenAI 音色 | MiMo 音色 | 语言 | 性别 |
-|-------------|----------|------|------|
+仅 `mimo-v2.5-tts` 模型支持预置音色。
+
+| OpenAI 音色 | MiMo Voice ID | 语言 | 性别 |
+|-------------|---------------|------|------|
 | alloy | 冰糖 | 中文 | 女性 |
 | echo | 茉莉 | 中文 | 女性 |
 | fable | 白桦 | 中文 | 男性 |
 | onyx | 苏打 | 中文 | 男性 |
 | nova | Mia | 英文 | 女性 |
 | shimmer | Chloe | 英文 | 女性 |
+| - | Milo | 英文 | 男性 |
+| - | Dean | 英文 | 男性 |
+
+> 💡 也可直接使用 MiMo 原生音色 ID（如 `mimo_default`、`冰糖`）作为 `voice` 参数。
 
 ### 风格控制
 
@@ -567,36 +577,67 @@ curl -X POST http://localhost:8080/v1/audio/speech   -H "Authorization: Bearer *
 
 **自然语言控制：** 在 `style` 参数中描述想要的风格
 ```bash
-curl -X POST http://localhost:8080/v1/audio/speech   -H "Authorization: Bearer ***"   -H "Content-Type: application/json"   -d '{
+curl -X POST http://localhost:8080/v1/audio/speech \
+  -H "Authorization: Bearer ***" \
+  -H "Content-Type: application/json" \
+  -d '{
     "model": "mimo-v2.5-tts",
     "input": "今天天气真好啊！",
     "voice": "alloy",
     "style": "用轻快上扬的语调，语速稍快，带着开心的情绪"
-  }'   --output speech.wav
+  }' \
+  --output speech.wav
 ```
 
-**标签控制：** 在文本中嵌入风格标签
+**标签控制：** 在文本开头嵌入风格标签
 ```bash
-curl -X POST http://localhost:8080/v1/audio/speech   -H "Authorization: Bearer ***"   -H "Content-Type: application/json"   -d '{
+curl -X POST http://localhost:8080/v1/audio/speech \
+  -H "Authorization: Bearer ***" \
+  -H "Content-Type: application/json" \
+  -d '{
     "model": "mimo-v2.5-tts",
     "input": "(温柔)你好，欢迎来到小米之家。",
     "voice": "alloy"
-  }'   --output speech.wav
+  }' \
+  --output speech.wav
 ```
 
-支持的风格标签：开心/悲伤/愤怒/温柔/高冷/活泼/磁性/甜美/东北话/四川话/粤语 等。
+**支持的风格标签：**
+
+| 类型 | 示例 |
+|------|------|
+| 基础情绪 | 开心/悲伤/愤怒/恐惧/惊讶/兴奋/委屈/平静/冷漠 |
+| 复合情绪 | 怅然/欣慰/无奈/愧疚/释然/嫉妒/厌倦/忐忑/动情 |
+| 整体语调 | 温柔/高冷/活泼/严肃/慵懒/俏皮/深沉/干练/凌厉 |
+| 音色定位 | 磁性/醇厚/清亮/空灵/稚嫩/苍老/甜美/沙哑/醇雅 |
+| 人设腔调 | 夹子音/御姐音/正太音/大叔音/台湾腔 |
+| 方言 | 东北话/四川话/河南话/粤语 |
+| 角色扮演 | 孙悟空/林黛玉 |
+| 唱歌 | 唱歌/sing/singing |
+
+**唱歌模式：** 在文本最开头添加 `(唱歌)` 标签，格式为：`(唱歌)歌词`
+
+**音频细粒度标签：** 可在文本中任意位置插入 `[音频标签]` 进行精细控制：
+- 语速与节奏：`[吸气]`/`[深呼吸]`/`[叹气]`/`[长叹一口气]`
+- 情绪状态：`[紧张]`/`[害怕]`/`[激动]`/`[疲惫]`/`[撒娇]`
+- 语音特征：`[颤抖]`/`[变调]`/`[破音]`/`[气声]`/`[沙哑]`
+- 哭笑表达：`[笑]`/`[轻笑]`/`[大笑]`/`[冷笑]`/`[抽泣]`/`[哽咽]`
 
 ### 自定义音色 (voicedesign)
 
 通过文本描述自动生成音色：
 
 ```bash
-curl -X POST http://localhost:8080/v1/audio/speech   -H "Authorization: Bearer ***"   -H "Content-Type: application/json"   -d '{
+curl -X POST http://localhost:8080/v1/audio/speech \
+  -H "Authorization: Bearer ***" \
+  -H "Content-Type: application/json" \
+  -d '{
     "model": "mimo-v2.5-tts-voicedesign",
     "input": "你好，世界！",
     "voice": "alloy",
     "style": "温柔甜美的女声，语速适中"
-  }'   --output speech.wav
+  }' \
+  --output speech.wav
 ```
 
 ### 声音克隆 (voiceclone)
@@ -604,11 +645,15 @@ curl -X POST http://localhost:8080/v1/audio/speech   -H "Authorization: Bearer *
 基于音频样本复刻任意音色，`voice` 参数传入参考音频的 base64 编码：
 
 ```bash
-curl -X POST http://localhost:8080/v1/audio/speech   -H "Authorization: Bearer ***"   -H "Content-Type: application/json"   -d '{
+curl -X POST http://localhost:8080/v1/audio/speech \
+  -H "Authorization: Bearer ***" \
+  -H "Content-Type: application/json" \
+  -d '{
     "model": "mimo-v2.5-tts-voiceclone",
     "input": "这是克隆声音后生成的语音。",
     "voice": "data:audio/wav;base64,UklGRi..."
-  }'   --output speech.wav
+  }' \
+  --output speech.wav
 ```
 
 ## ASR 语音识别
@@ -632,7 +677,10 @@ curl -X POST http://localhost:8080/v1/audio/speech   -H "Authorization: Bearer *
 ### 基本用法
 
 ```bash
-curl -X POST http://localhost:8080/v1/audio/transcriptions   -H "Authorization: Bearer ***"   -F "file=@audio.mp3"   -F "language=auto"
+curl -X POST http://localhost:8080/v1/audio/transcriptions \
+  -H "Authorization: Bearer ***" \
+  -F "file=@audio.mp3" \
+  -F "language=auto"
 ```
 
 返回：
@@ -652,6 +700,8 @@ curl -X POST http://localhost:8080/v1/audio/transcriptions   -H "Authorization: 
 
 ### 支持的音频格式
 
+目前支持 `wav` 和 `mp3` 格式的音频样本文件，传入前需将音频文件转换为 Base64 编码字符串，Base64 编码后的字符串大小上限为 **10MB**。
+
 | 格式 | MIME 类型 |
 |------|----------|
 | wav | audio/wav |
@@ -661,13 +711,22 @@ curl -X POST http://localhost:8080/v1/audio/transcriptions   -H "Authorization: 
 
 ```bash
 # 识别中文音频
-curl -X POST http://localhost:8080/v1/audio/transcriptions   -H "Authorization: Bearer ***"   -F "file=@meeting.wav"   -F "language=zh"
+curl -X POST http://localhost:8080/v1/audio/transcriptions \
+  -H "Authorization: Bearer ***" \
+  -F "file=@meeting.wav" \
+  -F "language=zh"
 
 # 识别英文音频
-curl -X POST http://localhost:8080/v1/audio/transcriptions   -H "Authorization: Bearer ***"   -F "file=@speech.mp3"   -F "language=en"
+curl -X POST http://localhost:8080/v1/audio/transcriptions \
+  -H "Authorization: Bearer ***" \
+  -F "file=@speech.mp3" \
+  -F "language=en"
 
 # 自动检测语言
-curl -X POST http://localhost:8080/v1/audio/transcriptions   -H "Authorization: Bearer ***"   -F "file=@audio.wav"   -F "language=auto"
+curl -X POST http://localhost:8080/v1/audio/transcriptions \
+  -H "Authorization: Bearer ***" \
+  -F "file=@audio.wav" \
+  -F "language=auto"
 ```
 
 ---
