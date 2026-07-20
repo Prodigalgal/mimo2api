@@ -1522,9 +1522,10 @@ async def auto_register_account(request: Request, username: str = Depends(verify
     if not mail_cfg.is_configured():
         return {"ok": False, "error": "请先在「临时邮箱」页配置 API 地址与管理口令"}
 
-    region = (data.get("region") or tm.register_region or "US").upper()
-    if region in ("CN", "ZH", "CHINA"):
-        return {"ok": False, "error": "注册地区不能选择中国，请使用 US / SG / JP 等"}
+    region = (data.get("region") or tm.register_region or "US").strip().upper()
+    if region in ("CN", "ZH", "CHINA", "PRC"):
+        return {"ok": False, "error": "注册地区不能选择中国，请使用 US / SG / JP 或 RANDOM"}
+    # RANDOM is resolved per attempt inside start_register
 
     session_id = (data.get("session_id") or "").strip() or None
     icode = (data.get("icode") or data.get("captcha") or "").strip() or None
@@ -1585,9 +1586,10 @@ async def auto_register_batch(request: Request, username: str = Depends(verify_a
     if not mail_cfg.is_configured():
         return {"ok": False, "error": "请先在「临时邮箱」页配置 API 地址与管理口令"}
 
-    region = (data.get("region") or tm.register_region or "US").upper()
-    if region in ("CN", "ZH", "CHINA"):
-        return {"ok": False, "error": "注册地区不能选择中国"}
+    region = (data.get("region") or tm.register_region or "US").strip().upper()
+    if region in ("CN", "ZH", "CHINA", "PRC"):
+        return {"ok": False, "error": "注册地区不能选择中国，请使用 US / SG / JP 或 RANDOM"}
+    # Each worker re-resolves RANDOM so accounts get different regions
 
     from .config import _clamp_int, _clamp_float
 
@@ -1639,6 +1641,7 @@ async def auto_register_batch(request: Request, username: str = Depends(verify_a
                 if state["stop"] or state["success"] >= target:
                     state["stop"] = True
                     return
+            # Pass RANDOM through so resolve_region picks a new country per attempt
             r = await _run_one_auto_register(
                 mail_cfg=mail_cfg,
                 region=region,
@@ -1649,6 +1652,8 @@ async def auto_register_batch(request: Request, username: str = Depends(verify_a
             )
             slim = _slim(r)
             slim["attempt"] = idx + 1
+            if r.get("region"):
+                slim["region"] = r.get("region")
             async with lock:
                 results.append(slim)
                 if _is_register_success(slim):

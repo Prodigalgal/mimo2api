@@ -31,8 +31,8 @@ class TempMailSettings:
     admin_password: str = ""
     domain: str = ""
     site_password: str = ""
-    # default registration region (must not be CN)
-    register_region: str = "US"
+    # default registration region: US / SG / … or RANDOM (never CN)
+    register_region: str = "RANDOM"
     # —— 自动注册精细参数 ——
     # 单次批量最多尝试次数（上限）
     batch_count: int = 1
@@ -51,9 +51,11 @@ class TempMailSettings:
 
     def normalized(self) -> "TempMailSettings":
         """Return a copy with values clamped to safe ranges."""
-        region = (self.register_region or "US").upper()
-        if region in ("CN", "ZH", "CHINA"):
+        region = (self.register_region or "US").upper().strip()
+        if region in ("CN", "ZH", "CHINA", "PRC"):
             region = "US"
+        if region in ("RAND", "AUTO", "*", "RND"):
+            region = "RANDOM"
         batch = _clamp_int(self.batch_count, 1, 1, 50)
         # success_target: 0 means no early stop; otherwise 1..batch
         st = _clamp_int(self.success_target, 1, 0, 50)

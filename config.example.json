@@ -7,7 +7,7 @@
     "admin_password": "YOUR_ADMIN_PASSWORD",
     "domain": "",
     "site_password": "",
-    "register_region": "US",
+    "register_region": "RANDOM",
     "batch_count": 5,
     "success_target": 3,
     "concurrent": 2,

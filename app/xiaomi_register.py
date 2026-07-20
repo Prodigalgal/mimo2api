@@ -42,6 +42,27 @@ UA = (
     "Chrome/150.0.0.0 Safari/537.36"
 )
 
+# Safe non-CN regions for registration (country codes used by Xiaomi account)
+REGISTER_REGIONS = (
+    "US", "SG", "JP", "HK", "TW", "GB", "DE", "FR", "IT", "ES",
+    "NL", "AU", "CA", "KR", "IN", "ID", "TH", "MY", "PH", "VN",
+    "BR", "MX", "PL", "SE", "CH", "AT", "BE", "IE", "NZ", "AE",
+)
+_CN_ALIASES = frozenset({"CN", "ZH", "CHINA", "PRC"})
+
+
+def resolve_region(region: Optional[str] = None) -> str:
+    """Resolve region code. RANDOM/AUTO/* → pick from REGISTER_REGIONS. Never CN."""
+    r = (region or "US").strip().upper()
+    if r in ("RANDOM", "RAND", "AUTO", "*", "RND"):
+        return random.choice(REGISTER_REGIONS)
+    if r in _CN_ALIASES:
+        raise XiaomiRegisterError("注册地区不能选择中国（CN），请使用 US / SG / JP 或 RANDOM")
+    # allow any non-empty 2-letter-ish code except CN; prefer known list
+    if len(r) < 2:
+        return random.choice(REGISTER_REGIONS)
+    return r
+
 # Production public key used by account.xiaomi.com frontend encryptAes
 _RSA_PUB_B64 = (
     "MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQCYEVrK/4Mahiv0pUJgTybx4J9P5dUT"
@@ -320,9 +341,8 @@ async def start_register(
     ticket sent, then wait mail code and finish registration in one shot.
     Otherwise returns need_captcha for manual UI fill.
     """
-    region = (region or "US").upper().strip()
-    if region in ("CN", "ZH", "CHINA"):
-        raise XiaomiRegisterError("注册地区不能选择中国（CN），请使用 US / SG / JP 等")
+    region = resolve_region(region)
+    print(f"[Register] using region={region}")
 
     password = password or random_password()
     addr = await create_address(mail_cfg, domain=domain)
