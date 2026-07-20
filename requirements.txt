@@ -4,3 +4,5 @@ httpx==0.27.2
 pydantic>=2.10.3
 python-multipart==0.0.20
 pycryptodome>=3.20.0
+ddddocr>=1.4.11
+onnxruntime>=1.16.0

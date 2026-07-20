@@ -273,8 +273,8 @@
                 <!-- 自动注册 -->
                 <div id="panel-register" class="tab-panel">
                     <div class="status info">使用已配置的 Cloudflare 临时邮箱自动注册小米账号。<br>
-                        地区默认非中国（US），密码随机。需过图片/滑块验证码（当前为图片验证码，手动填写）。<br>
-                        注册成功后自动登录申请 token 并进入保活；token 失效需 mail code 时会自动从临时邮箱取码重登。</div>
+                        地区默认非中国（US），密码随机。图片验证码默认用 <b>ddddocr 自动识别</b>（失败自动重试，仍失败再手动填）。<br>
+                        注册成功后自动登录申请 token 并保活；token 失效需 mail code 时从临时邮箱自动取码重登。</div>
                     <div class="field"><label>注册地区（勿选 CN）</label>
                         <select id="reg-region" style="width:100%;padding:12px 16px;background:var(--bg-input);border:1px solid var(--border);border-radius:10px;color:var(--text)">
                             <option value="US" selected>United States (US)</option>
@@ -289,8 +289,15 @@
                     <div class="field"><label>域名（可选，留空用配置默认）</label>
                         <input type="text" id="reg-domain" placeholder="例如 edu.omnnu.xyz">
                     </div>
+                    <label class="toggle-row" style="margin:8px 0 12px">
+                        <span class="toggle-label">自动 OCR 过图片验证码（ddddocr）</span>
+                        <label class="switch">
+                            <input type="checkbox" id="reg-auto-ocr" checked>
+                            <span class="slider"></span>
+                        </label>
+                    </label>
                     <div id="reg-captcha-wrap" style="display:none;margin:12px 0">
-                        <div class="field"><label>图片验证码</label>
+                        <div class="field"><label>图片验证码（自动失败时手动填写）</label>
                             <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
                                 <img id="reg-captcha-img" alt="captcha" style="height:48px;border-radius:8px;background:#fff;cursor:pointer" title="点击刷新" onclick="refreshRegCaptcha()">
                                 <input type="text" id="reg-icode" placeholder="输入验证码" style="flex:1;min-width:120px" maxlength="12">
@@ -299,8 +306,9 @@
                         <div class="info-line" style="font-size:12px;color:var(--text-muted);margin-bottom:8px">邮箱: <code id="reg-email-preview"></code> · 密码已随机生成</div>
                     </div>
                     <div class="btn-group">
-                        <button class="btn-primary" style="flex:1" id="btn-reg-start" onclick="startAutoRegister()">开始注册</button>
-                        <button class="btn-success" style="flex:1;display:none" id="btn-reg-submit" onclick="submitRegCaptcha()">提交验证码并完成</button>
+                        <button class="btn-primary" style="flex:1" id="btn-reg-start" onclick="startAutoRegister()">一键注册</button>
+                        <button class="btn-outline" style="flex:1;display:none" id="btn-reg-retry-ocr" onclick="retryRegOcr()">再试 OCR</button>
+                        <button class="btn-success" style="flex:1;display:none" id="btn-reg-submit" onclick="submitRegCaptcha()">手动提交验证码</button>
                     </div>
                     <div id="regResult"></div>
                 </div>
@@ -528,20 +536,75 @@ document.addEventListener('DOMContentLoaded',function(){$id('langBtn').textConte
             $id('reg-captcha-img').src = img || '';
             $id('reg-email-preview').textContent = email || '';
             $id('btn-reg-submit').style.display = 'inline-flex';
+            if ($id('btn-reg-retry-ocr')) $id('btn-reg-retry-ocr').style.display = 'inline-flex';
             $id('reg-icode').value = '';
             $id('reg-icode').focus();
+        }
+
+        function hideRegCaptcha() {
+            $id('reg-captcha-wrap').style.display = 'none';
+            $id('btn-reg-submit').style.display = 'none';
+            if ($id('btn-reg-retry-ocr')) $id('btn-reg-retry-ocr').style.display = 'none';
+        }
+
+        function formatRegSuccess(j) {
+            const uid = (j.saved && j.saved.user_id) || (j.tokens && j.tokens.user_id) || '';
+            const ocrInfo = j.captcha_auto
+                ? ('<br>OCR: <code>' + (j.captcha_ocr || '') + '</code> · 尝试 ' + ((j.captcha_attempts || []).length) + ' 次')
+                : '';
+            return '✅ 注册成功' + ocrInfo +
+                '<br>邮箱: <code>' + (j.email || '') + '</code><br>密码: <code>' + (j.password || _regPassword) + '</code><br>userId: ' + uid +
+                '<br>已保存账号并进入保活（passToken + 临时邮箱自动取码）';
+        }
+
+        function handleRegResponse(j) {
+            if (j.need_captcha || (j.captcha_image && !j.logged_in && !j.registered)) {
+                _regSessionId = j.session_id || _regSessionId;
+                _regPassword = j.password || _regPassword;
+                showRegCaptcha(j.captcha_image, j.email);
+                const tries = (j.captcha_attempts || []).map(function (a) {
+                    return (a.ocr || '?');
+                }).join(', ');
+                let msg = j.message || '请手动填写验证码';
+                if (j.captcha_auto_failed && tries) {
+                    msg += '<br>OCR 尝试: ' + tries;
+                }
+                if (j.ocr_available === false) {
+                    msg += '<br>（未安装 ddddocr：pip install ddddocr）';
+                }
+                showStatus('regResult', j.captcha_auto_failed ? 'err' : 'info', msg);
+                return;
+            }
+            if (j.ok && (j.logged_in || (j.saved && j.saved.ok))) {
+                showStatus('regResult', 'ok', formatRegSuccess(j));
+                toast('注册成功');
+                _regSessionId = null;
+                hideRegCaptcha();
+                loadAccounts();
+                return;
+            }
+            if (j.ok && j.registered && !j.logged_in) {
+                showStatus('regResult', 'info',
+                    '注册成功但自动登录未完成<br>邮箱: <code>' + j.email + '</code><br>密码: <code>' + j.password + '</code><br>' + (j.message || ''));
+                return;
+            }
+            showStatus('regResult', 'err', j.error || j.message || '注册失败');
         }
 
         async function startAutoRegister() {
             _regSessionId = null;
             _regPassword = '';
-            $id('reg-captcha-wrap').style.display = 'none';
-            $id('btn-reg-submit').style.display = 'none';
-            showStatus('regResult', 'info', '创建临时邮箱并获取验证码...');
+            hideRegCaptcha();
+            const autoOcr = $id('reg-auto-ocr') ? $id('reg-auto-ocr').checked : true;
+            showStatus('regResult', 'info', autoOcr
+                ? '创建临时邮箱 → ddddocr 自动识别验证码（最多约 10 次）→ 收信取码 → 登录…（约 1–3 分钟）'
+                : '创建临时邮箱并获取验证码…');
             $id('btn-reg-start').disabled = true;
             try {
                 const body = {
                     region: $id('reg-region').value || 'US',
+                    auto_captcha: autoOcr,
+                    captcha_retries: 10,
                 };
                 const dom = $id('reg-domain').value.trim();
                 if (dom) body.domain = dom;
@@ -551,22 +614,34 @@ document.addEventListener('DOMContentLoaded',function(){$id('langBtn').textConte
                     body: JSON.stringify(body)
                 });
                 const j = await r.json();
-                if (j.need_captcha || j.captcha_image) {
-                    _regSessionId = j.session_id;
-                    _regPassword = j.password || '';
-                    showRegCaptcha(j.captcha_image, j.email);
-                    showStatus('regResult', 'info', j.message || '请填写验证码后继续');
-                } else if (j.ok && j.logged_in) {
-                    showStatus('regResult', 'ok', '注册成功 userId=' + (j.saved && j.saved.user_id || ''));
-                    toast('注册并保存成功');
-                    loadAccounts();
-                } else {
-                    showStatus('regResult', 'err', j.error || JSON.stringify(j).slice(0, 200));
-                }
+                handleRegResponse(j);
             } catch (e) {
                 showStatus('regResult', 'err', e.message);
             } finally {
                 $id('btn-reg-start').disabled = false;
+            }
+        }
+
+        async function retryRegOcr() {
+            if (!_regSessionId) return startAutoRegister();
+            showStatus('regResult', 'info', 'ddddocr 再次自动识别…');
+            $id('btn-reg-retry-ocr').disabled = true;
+            try {
+                const r = await fetch('/api/account/auto-register', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        session_id: _regSessionId,
+                        auto_captcha: true,
+                        captcha_retries: 10,
+                    })
+                });
+                const j = await r.json();
+                handleRegResponse(j);
+            } catch (e) {
+                showStatus('regResult', 'err', e.message);
+            } finally {
+                $id('btn-reg-retry-ocr').disabled = false;
             }
         }
 
@@ -592,7 +667,7 @@ document.addEventListener('DOMContentLoaded',function(){$id('langBtn').textConte
 
         async function submitRegCaptcha() {
             if (!_regSessionId) {
-                toast('请先点击开始注册', true);
+                toast('请先点击一键注册', true);
                 return;
             }
             const icode = $id('reg-icode').value.trim();
@@ -606,31 +681,16 @@ document.addEventListener('DOMContentLoaded',function(){$id('langBtn').textConte
                 const r = await fetch('/api/account/auto-register', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ session_id: _regSessionId, icode: icode })
+                    body: JSON.stringify({ session_id: _regSessionId, icode: icode, auto_captcha: false })
                 });
                 const j = await r.json();
-                if (j.need_captcha || (j.captcha_image && !j.ok)) {
+                if (j.need_captcha || (j.captcha_image && !j.ok && !j.registered)) {
                     if (j.session_id) _regSessionId = j.session_id;
                     if (j.captcha_image) showRegCaptcha(j.captcha_image, j.email || $id('reg-email-preview').textContent);
                     showStatus('regResult', 'err', j.error || '验证码错误，请重试');
                     return;
                 }
-                if (j.ok && (j.logged_in || (j.saved && j.saved.ok))) {
-                    const uid = (j.saved && j.saved.user_id) || (j.tokens && j.tokens.user_id) || '';
-                    showStatus('regResult', 'ok',
-                        '✅ 注册成功<br>邮箱: <code>' + (j.email || '') + '</code><br>密码: <code>' + (j.password || _regPassword) + '</code><br>userId: ' + uid +
-                        '<br>已保存账号并进入保活（passToken + 临时邮箱自动取码）');
-                    toast('注册成功');
-                    _regSessionId = null;
-                    $id('reg-captcha-wrap').style.display = 'none';
-                    $id('btn-reg-submit').style.display = 'none';
-                    loadAccounts();
-                } else if (j.ok && j.registered && !j.logged_in) {
-                    showStatus('regResult', 'info',
-                        '注册成功但自动登录未完成<br>邮箱: <code>' + j.email + '</code><br>密码: <code>' + j.password + '</code><br>' + (j.message || ''));
-                } else {
-                    showStatus('regResult', 'err', j.error || j.message || '注册失败');
-                }
+                handleRegResponse(j);
             } catch (e) {
                 showStatus('regResult', 'err', e.message);
             } finally {

@@ -220,8 +220,75 @@ def _prune_pending() -> None:
             _PENDING_REG.pop(k, None)
 
 
-async def fetch_captcha(client: httpx.AsyncClient) -> str:
-    """GET image captcha; returns base64 data-url. Sets ick cookie on client."""
+_OCR_ENGINE = None
+_OCR_INITED = False
+
+
+def ocr_available() -> bool:
+    """Whether ddddocr (or compatible) can be loaded."""
+    try:
+        _get_ocr()
+        return _OCR_ENGINE is not None
+    except Exception:
+        return False
+
+
+def _get_ocr():
+    global _OCR_ENGINE, _OCR_INITED
+    if _OCR_INITED:
+        return _OCR_ENGINE
+    _OCR_INITED = True
+    try:
+        import ddddocr  # type: ignore
+
+        _OCR_ENGINE = ddddocr.DdddOcr(show_ad=False)
+    except Exception as e:
+        print(f"[Register] ddddocr unavailable, captcha auto-solve disabled: {e}")
+        _OCR_ENGINE = None
+    return _OCR_ENGINE
+
+
+def solve_captcha_image(image_bytes: bytes) -> str:
+    """OCR image captcha → cleaned alphanumeric/text string."""
+    ocr = _get_ocr()
+    if ocr is None:
+        return ""
+    try:
+        raw = ocr.classification(image_bytes)
+    except Exception as e:
+        print(f"[Register] OCR failed: {e}")
+        return ""
+    # keep letters/digits (Xiaomi register captcha is usually alphanumeric)
+    text = re.sub(r"[^0-9A-Za-z]", "", str(raw or ""))
+    return text
+
+
+def solve_captcha_candidates(image_bytes: bytes) -> List[str]:
+    """OCR + case variants (Xiaomi icode often case-insensitive)."""
+    primary = solve_captcha_image(image_bytes)
+    if not primary:
+        return []
+    out: List[str] = []
+    for t in (primary, primary.lower(), primary.upper()):
+        if t and t not in out:
+            out.append(t)
+    return out
+
+
+def _captcha_data_url(image_bytes: bytes, content_type: str = "") -> str:
+    b64 = base64.b64encode(image_bytes).decode("ascii")
+    ctype = (content_type or "image/jpeg").lower()
+    if "png" in ctype:
+        mime = "image/png"
+    elif "gif" in ctype:
+        mime = "image/gif"
+    else:
+        mime = "image/jpeg"
+    return f"data:{mime};base64,{b64}"
+
+
+async def fetch_captcha(client: httpx.AsyncClient) -> tuple:
+    """GET image captcha. Returns (raw_bytes, data_url). Sets ick cookie on client."""
     r = await client.get(
         f"{ACCOUNT}/pass/getCode",
         params={"icodeType": "register", "_": int(time.time() * 1000)},
@@ -232,15 +299,8 @@ async def fetch_captcha(client: httpx.AsyncClient) -> str:
     )
     if r.status_code != 200 or not r.content:
         raise XiaomiRegisterError(f"获取验证码图片失败 HTTP {r.status_code}")
-    b64 = base64.b64encode(r.content).decode("ascii")
-    ctype = r.headers.get("content-type") or "image/jpeg"
-    if "png" in ctype:
-        mime = "image/png"
-    elif "gif" in ctype:
-        mime = "image/gif"
-    else:
-        mime = "image/jpeg"
-    return f"data:{mime};base64,{b64}"
+    data_url = _captcha_data_url(r.content, r.headers.get("content-type") or "")
+    return r.content, data_url
 
 
 async def start_register(
@@ -250,8 +310,16 @@ async def start_register(
     password: Optional[str] = None,
     sid: str = SID_DEFAULT,
     domain: Optional[str] = None,
+    auto_captcha: bool = True,
+    captcha_retries: int = 8,
+    otp_timeout: float = 120.0,
 ) -> Dict[str, Any]:
-    """Create temp mail + encrypt credentials + fetch captcha. Returns pending session."""
+    """Create temp mail + encrypt credentials.
+
+    When auto_captcha=True (default) and ddddocr available: OCR + retry until
+    ticket sent, then wait mail code and finish registration in one shot.
+    Otherwise returns need_captcha for manual UI fill.
+    """
     region = (region or "US").upper().strip()
     if region in ("CN", "ZH", "CHINA"):
         raise XiaomiRegisterError("注册地区不能选择中国（CN），请使用 US / SG / JP 等")
@@ -264,7 +332,7 @@ async def start_register(
     device_id = _new_device_id()
     client = _client(device_id)
     try:
-        captcha_b64 = await fetch_captcha(client)
+        img_bytes, captcha_b64 = await fetch_captcha(client)
         sid_session = uuid.uuid4().hex
         pending = PendingRegister(
             session_id=sid_session,
@@ -284,16 +352,34 @@ async def start_register(
         )
         _PENDING_REG[sid_session] = pending
         _prune_pending()
+
+        can_auto = auto_captcha and ocr_available()
+        if can_auto:
+            return await _auto_solve_and_finish(
+                client,
+                pending,
+                mail_cfg,
+                first_image=img_bytes,
+                first_data_url=captcha_b64,
+                captcha_retries=captcha_retries,
+                otp_timeout=otp_timeout,
+            )
+
         return {
             "ok": True,
             "need_captcha": True,
+            "auto_captcha": False,
+            "ocr_available": ocr_available(),
             "session_id": sid_session,
             "email": addr.address,
             "password": password,
             "region": region,
             "captcha_image": captcha_b64,
             "mail_jwt": addr.jwt,
-            "message": "临时邮箱已创建，请填写图片验证码后继续注册",
+            "message": (
+                "临时邮箱已创建，请填写图片验证码后继续注册"
+                + ("" if ocr_available() else "（未安装 ddddocr，无法自动识别）")
+            ),
         }
     finally:
         await client.aclose()
@@ -305,7 +391,7 @@ async def refresh_captcha(session_id: str) -> Dict[str, Any]:
         raise XiaomiRegisterError("注册会话已过期，请重新开始")
     client = _client(pending.device_id, pending.cookies)
     try:
-        captcha_b64 = await fetch_captcha(client)
+        _img, captcha_b64 = await fetch_captcha(client)
         pending.captcha_b64 = captcha_b64
         pending.cookies = _dump_cookies(client)
         _PENDING_REG[session_id] = pending
@@ -314,9 +400,120 @@ async def refresh_captcha(session_id: str) -> Dict[str, Any]:
             "session_id": session_id,
             "captcha_image": captcha_b64,
             "email": pending.email,
+            "ocr_available": ocr_available(),
         }
     finally:
         await client.aclose()
+
+
+def _is_captcha_error(code) -> bool:
+    try:
+        return int(code or 0) in (87001, 70014, 1200212)
+    except Exception:
+        return False
+
+
+async def _auto_solve_and_finish(
+    client: httpx.AsyncClient,
+    pending: PendingRegister,
+    mail_cfg: TempMailConfig,
+    *,
+    first_image: Optional[bytes] = None,
+    first_data_url: str = "",
+    captcha_retries: int = 8,
+    otp_timeout: float = 120.0,
+) -> Dict[str, Any]:
+    """OCR captcha with retries, then complete register+login."""
+    attempts: List[dict] = []
+    img_bytes = first_image
+    data_url = first_data_url or pending.captcha_b64
+
+    import asyncio
+
+    for i in range(max(1, captcha_retries)):
+        if img_bytes is None:
+            img_bytes, data_url = await fetch_captcha(client)
+            pending.captcha_b64 = data_url
+            pending.cookies = _dump_cookies(client)
+            _PENDING_REG[pending.session_id] = pending
+
+        candidates = solve_captcha_candidates(img_bytes)
+        attempts.append({
+            "try": i + 1,
+            "ocr": candidates[0] if candidates else "",
+            "candidates": candidates,
+            "len": len(img_bytes or b""),
+        })
+        if not candidates or len(candidates[0]) < 3:
+            print(f"[Register] OCR empty/too short on try {i + 1}, refresh captcha")
+            img_bytes = None
+            await asyncio.sleep(0.4)
+            continue
+
+        captcha_ok = False
+        last_j: dict = {}
+        used_icode = ""
+        for icode in candidates:
+            used_icode = icode
+            j = await _send_email_reg_ticket(client, pending, icode)
+            last_j = j
+            code = j.get("code")
+            if code in (0, "0", None):
+                captcha_ok = True
+                break
+            if int(code or 0) == 25001:
+                raise XiaomiRegisterError("邮箱已被注册", code=25001, data=j)
+            if not _is_captcha_error(code):
+                raise XiaomiRegisterError(
+                    j.get("desc") or j.get("description") or f"发送注册邮件失败: {j}",
+                    code=int(code) if str(code).isdigit() else None,
+                    data=j,
+                )
+            # captcha wrong for this candidate — try next case variant without refresh
+            print(f"[Register] captcha reject icode={icode!r} try={i + 1}")
+
+        if captcha_ok:
+            pending.ticket_sent = True
+            pending.cookies = _dump_cookies(client)
+            _PENDING_REG[pending.session_id] = pending
+            print(f"[Register] captcha OCR ok: {used_icode!r} after {i + 1} image(s)")
+            result = await _finish_after_ticket_sent(
+                client, pending, mail_cfg, otp_timeout=otp_timeout
+            )
+            result["captcha_auto"] = True
+            result["captcha_attempts"] = attempts
+            result["captcha_ocr"] = used_icode
+            return result
+
+        # all candidates failed → new image
+        img_bytes = None
+        await asyncio.sleep(0.5)
+
+    # all OCR retries failed → hand off to manual
+    if img_bytes is None:
+        try:
+            img_bytes, data_url = await fetch_captcha(client)
+            pending.captcha_b64 = data_url
+            pending.cookies = _dump_cookies(client)
+            _PENDING_REG[pending.session_id] = pending
+        except Exception:
+            data_url = pending.captcha_b64
+
+    return {
+        "ok": True,
+        "need_captcha": True,
+        "auto_captcha": True,
+        "ocr_available": True,
+        "captcha_auto_failed": True,
+        "captcha_attempts": attempts,
+        "session_id": pending.session_id,
+        "email": pending.email,
+        "password": pending.password,
+        "region": pending.region,
+        "captcha_image": data_url or pending.captcha_b64,
+        "mail_jwt": pending.mail_jwt,
+        "message": f"自动识别验证码失败（已重试 {len(attempts)} 次），请手动填写",
+    }
 
 
 async def _send_email_reg_ticket(
@@ -386,6 +583,137 @@ async def _verify_email_reg_ticket(
     return _strip_json(r.text)
 
 
+async def _finish_after_ticket_sent(
+    client: httpx.AsyncClient,
+    pending: PendingRegister,
+    mail_cfg: TempMailConfig,
+    *,
+    otp_timeout: float = 120.0,
+) -> Dict[str, Any]:
+    """After sendEmailRegTicket succeeded: wait mail code → verify → login."""
+    seen_mail_ids: set = set()
+
+    # Snapshot existing mails so we only accept NEW codes
+    try:
+        from .temp_mail import list_parsed_mails
+
+        for m in await list_parsed_mails(mail_cfg, pending.mail_jwt, limit=20):
+            mid = m.get("id") or m.get("message_id")
+            if mid is not None:
+                seen_mail_ids.add(mid)
+    except Exception:
+        pass
+
+    mail_code = await wait_for_code(
+        mail_cfg,
+        pending.mail_jwt,
+        timeout=otp_timeout,
+        seen_ids=seen_mail_ids,
+    )
+    print(f"[Register] got register mail code for {pending.email}")
+
+    j2 = await _verify_email_reg_ticket(client, pending, mail_code)
+    code2 = j2.get("code")
+    if code2 not in (0, "0", None):
+        raise XiaomiRegisterError(
+            j2.get("desc") or j2.get("description") or f"校验邮箱验证码失败: {j2}",
+            code=int(code2) if str(code2).isdigit() else None,
+            data=j2,
+        )
+
+    pending.cookies = _dump_cookies(client)
+    _PENDING_REG[pending.session_id] = pending
+
+    # Prefer passToken from verify response / cookies over password re-login
+    pass_token = str(j2.get("passToken") or "")
+    user_id = str(j2.get("userId") or "")
+    c_user_id = str(j2.get("cUserId") or "")
+    if not pass_token:
+        for c in pending.cookies:
+            if c.get("name") == "passToken" and c.get("value"):
+                pass_token = c["value"]
+            elif c.get("name") == "userId" and c.get("value"):
+                user_id = user_id or c["value"]
+            elif c.get("name") == "cUserId" and c.get("value"):
+                c_user_id = c_user_id or c["value"]
+
+    tokens: dict = {}
+    login_result: dict = {}
+
+    if pass_token:
+        try:
+            from .xiaomi_login import renew_with_pass_token
+
+            t = await renew_with_pass_token(
+                email=pending.email,
+                pass_token=pass_token,
+                user_id=user_id,
+                c_user_id=c_user_id,
+                device_id=pending.device_id,
+            )
+            tokens = t.to_dict()
+            login_result = {"ok": True, "tokens": tokens, "via": "passToken"}
+        except Exception as e:
+            print(f"[Register] passToken exchange failed: {e}")
+            login_result = {"ok": False, "error": str(e)[:200]}
+
+    if not tokens:
+        try:
+            from .xiaomi_login import login_with_password, send_pending_email_otp, XiaomiLoginError
+
+            login_result = await login_with_password(pending.email, pending.password)
+            if login_result.get("need_otp") and login_result.get("session_id"):
+                otp_sid = login_result["session_id"]
+                await send_pending_email_otp(otp_sid)
+                # Must get a NEW mail (seen_ids already has register mail)
+                login_code = await wait_for_code(
+                    mail_cfg,
+                    pending.mail_jwt,
+                    timeout=otp_timeout,
+                    seen_ids=seen_mail_ids,
+                )
+                print(f"[Register] got login OTP for {pending.email}")
+                login_result = await login_with_password(
+                    pending.email,
+                    pending.password,
+                    otp_code=login_code,
+                    session_id=otp_sid,
+                )
+            if login_result.get("ok") and login_result.get("tokens"):
+                tokens = login_result["tokens"]
+        except Exception as e:
+            print(f"[Register] password login failed: {e}")
+            login_result = {"ok": False, "error": str(e)[:200], "need_manual": True}
+
+    session_id = pending.session_id
+    if not tokens:
+        _PENDING_REG.pop(session_id, None)
+        return {
+            "ok": True,
+            "registered": True,
+            "logged_in": False,
+            "email": pending.email,
+            "password": pending.password,
+            "region": pending.region,
+            "mail_jwt": pending.mail_jwt,
+            "login": login_result,
+            "message": "注册成功（图片验证码已自动通过），但自动登录未完成，请用邮箱密码手动导入",
+        }
+
+    _PENDING_REG.pop(session_id, None)
+    return {
+        "ok": True,
+        "registered": True,
+        "logged_in": True,
+        "email": pending.email,
+        "password": pending.password,
+        "region": pending.region,
+        "mail_jwt": pending.mail_jwt,
+        "tokens": tokens,
+        "message": "注册并登录成功（图片验证码 OCR 自动通过）",
+    }
+
+
 async def submit_captcha_and_register(
     session_id: str,
     icode: str,
@@ -406,9 +734,9 @@ async def submit_captcha_and_register(
         code = j.get("code")
         if code not in (0, "0", None):
             # captcha wrong → refresh image for retry
-            if int(code or 0) in (87001, 70014, 1200212):
+            if _is_captcha_error(code):
                 try:
-                    pending.captcha_b64 = await fetch_captcha(client)
+                    _img, pending.captcha_b64 = await fetch_captcha(client)
                     pending.cookies = _dump_cookies(client)
                     _PENDING_REG[session_id] = pending
                 except Exception:
@@ -429,73 +757,9 @@ async def submit_captcha_and_register(
         pending.ticket_sent = True
         pending.cookies = _dump_cookies(client)
         _PENDING_REG[session_id] = pending
-
-        # Wait for email OTP from temp mail
-        mail_code = await wait_for_code(
-            mail_cfg,
-            pending.mail_jwt,
-            timeout=otp_timeout,
+        return await _finish_after_ticket_sent(
+            client, pending, mail_cfg, otp_timeout=otp_timeout
         )
-
-        j2 = await _verify_email_reg_ticket(client, pending, mail_code)
-        code2 = j2.get("code")
-        if code2 not in (0, "0", None):
-            raise XiaomiRegisterError(
-                j2.get("desc") or j2.get("description") or f"校验邮箱验证码失败: {j2}",
-                code=int(code2) if str(code2).isdigit() else None,
-                data=j2,
-            )
-
-        # Registration succeeded — login to get MiMo tokens
-        from .xiaomi_login import login_with_password, XiaomiLoginError
-
-        login_result = await login_with_password(pending.email, pending.password)
-        # If need OTP for login, auto-handle via temp mail
-        if login_result.get("need_otp") and login_result.get("session_id"):
-            from .xiaomi_login import send_pending_email_otp
-
-            otp_sid = login_result["session_id"]
-            await send_pending_email_otp(otp_sid)
-            login_code = await wait_for_code(
-                mail_cfg,
-                pending.mail_jwt,
-                timeout=otp_timeout,
-            )
-            login_result = await login_with_password(
-                pending.email,
-                pending.password,
-                otp_code=login_code,
-                session_id=otp_sid,
-            )
-
-        if not login_result.get("ok"):
-            # still return credentials so user can import later
-            _PENDING_REG.pop(session_id, None)
-            return {
-                "ok": True,
-                "registered": True,
-                "logged_in": False,
-                "email": pending.email,
-                "password": pending.password,
-                "region": pending.region,
-                "mail_jwt": pending.mail_jwt,
-                "login": login_result,
-                "message": "注册成功，但自动登录未完成，请手动导入",
-            }
-
-        tokens = login_result.get("tokens") or {}
-        _PENDING_REG.pop(session_id, None)
-        return {
-            "ok": True,
-            "registered": True,
-            "logged_in": True,
-            "email": pending.email,
-            "password": pending.password,
-            "region": pending.region,
-            "mail_jwt": pending.mail_jwt,
-            "tokens": tokens,
-            "message": "注册并登录成功",
-        }
     except TempMailError as e:
         raise XiaomiRegisterError(str(e), data=e.data) from e
     finally:
@@ -511,18 +775,48 @@ async def auto_register(
     session_id: Optional[str] = None,
     otp_timeout: float = 120.0,
     domain: Optional[str] = None,
+    auto_captcha: bool = True,
+    captcha_retries: int = 8,
 ) -> Dict[str, Any]:
     """
     High-level register entry:
-    - no session: start (return captcha)
-    - session + icode: complete registration
+    - no session: start (auto OCR captcha when possible, else return captcha)
+    - session + icode: complete registration manually
+    - session + auto_captcha retry without icode: re-run OCR on new captchas
     """
     if session_id and icode:
         return await submit_captcha_and_register(
             session_id, icode, mail_cfg, otp_timeout=otp_timeout
         )
+
+    # Resume pending session: auto OCR retries
+    if session_id and not icode and auto_captcha:
+        pending = _PENDING_REG.get(session_id)
+        if not pending:
+            raise XiaomiRegisterError("注册会话已过期，请重新开始")
+        if not ocr_available():
+            raise XiaomiRegisterError("请填写验证码（OCR 不可用）")
+        client = _client(pending.device_id, pending.cookies)
+        try:
+            return await _auto_solve_and_finish(
+                client,
+                pending,
+                mail_cfg,
+                captcha_retries=captcha_retries,
+                otp_timeout=otp_timeout,
+            )
+        finally:
+            await client.aclose()
+
     if session_id and not icode:
         raise XiaomiRegisterError("请填写验证码")
+
     return await start_register(
-        mail_cfg, region=region, password=password, domain=domain
+        mail_cfg,
+        region=region,
+        password=password,
+        domain=domain,
+        auto_captcha=auto_captcha,
+        captcha_retries=captcha_retries,
+        otp_timeout=otp_timeout,
     )

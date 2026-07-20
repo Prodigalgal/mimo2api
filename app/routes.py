@@ -1469,6 +1469,11 @@ async def auto_register_account(request: Request, username: str = Depends(verify
 
     session_id = (data.get("session_id") or "").strip() or None
     icode = (data.get("icode") or data.get("captcha") or "").strip() or None
+    # default: auto OCR on; pass auto_captcha=false to force manual only
+    auto_captcha = data.get("auto_captcha", True)
+    if isinstance(auto_captcha, str):
+        auto_captcha = auto_captcha.strip().lower() not in ("0", "false", "no", "off")
+    captcha_retries = int(data.get("captcha_retries") or 10)
 
     if session_id and data.get("refresh_captcha"):
         try:
@@ -1485,6 +1490,8 @@ async def auto_register_account(request: Request, username: str = Depends(verify
             session_id=session_id,
             otp_timeout=float(data.get("otp_timeout") or 120),
             domain=(data.get("domain") or tm.domain or None),
+            auto_captcha=bool(auto_captcha),
+            captcha_retries=captcha_retries,
         )
     except XiaomiRegisterError as e:
         out = {"ok": False, "error": str(e), "code": e.code, "data": e.data}
