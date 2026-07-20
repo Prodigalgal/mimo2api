@@ -1,5 +1,6 @@
 """配置管理模块"""
 
+import os
 import json
 import threading
 from pathlib import Path
@@ -16,10 +17,28 @@ class MimoAccount:
     login_time: str = ""
     last_test: str = ""
     is_valid: bool = False
+    # Google/Xiaomi email+password import & auto-renew fields
+    email: str = ""
+    password: str = ""
+    pass_token: str = ""
+    c_user_id: str = ""
+    device_id: str = ""
+    auto_renew: bool = True
+    last_renew: str = ""
+    renew_error: str = ""
 
     def to_dict(self):
         d = asdict(self)
         d["token_masked"] = self.service_token[:16] + "..." + self.service_token[-6:] if len(self.service_token) > 22 else "***"
+        # never expose secrets in API responses
+        if d.get("password"):
+            d["password"] = "***" if self.password else ""
+        if d.get("pass_token"):
+            pt = self.pass_token
+            d["pass_token_masked"] = (pt[:12] + "..." + pt[-6:]) if len(pt) > 20 else ("***" if pt else "")
+            d["pass_token"] = d["pass_token_masked"]
+        d["has_password"] = bool(self.password)
+        d["has_pass_token"] = bool(self.pass_token)
         return d
 
 
@@ -50,12 +69,19 @@ class Config:
         return d
 
     def to_save_dict(self):
-        """用于保存到文件的格式（不含 token_masked）"""
+        """用于保存到文件的格式（不含 token_masked / 脱敏字段）"""
+        skip = {
+            "token_masked", "pass_token_masked", "has_password", "has_pass_token",
+        }
         d = {
             "api_keys": self.api_keys,
             "admin_password": self.admin_password,
             "mimo_accounts": [
-                {k: v for k, v in acc.to_dict().items() if k != "token_masked"}
+                {
+                    k: getattr(acc, k)
+                    for k in MimoAccount.__dataclass_fields__
+                    if k not in skip
+                }
                 for acc in self.mimo_accounts
             ],
             "tools_passthrough": self.tools_passthrough,
@@ -68,7 +94,7 @@ class Config:
 class ConfigManager:
     """配置管理器 - 线程安全"""
 
-    def __init__(self, config_file: str = "config.json"):
+    def __init__(self, config_file: str = os.getenv("MIMO2API_CONFIG_FILE", "config.json")):
         self.config_file = Path(config_file)
         self.config = Config()
         self.lock = threading.RLock()

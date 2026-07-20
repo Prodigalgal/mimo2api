@@ -7,4 +7,9 @@ config.json
 usage.json
 responses.json
 sessions.json
+app/responses.json
 *.log
+local-debug/
+*.har
+login*.png
+.xiaomi_login_*

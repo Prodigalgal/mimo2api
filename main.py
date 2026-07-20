@@ -32,7 +32,10 @@ app.add_middleware(
 async def startup_discover_models():
     import os as _anthropic_os
     from app.batch import init_batch_storage as _mimo_init_batch_storage
-    _mimo_init_batch_storage(_anthropic_os.path.join(_anthropic_os.path.dirname(_anthropic_os.path.abspath(__file__)), ".anthropic_batches"))
+    _mimo_init_batch_storage(_anthropic_os.getenv(
+        "MIMO2API_BATCH_DIR",
+        _anthropic_os.path.join(_anthropic_os.path.dirname(_anthropic_os.path.abspath(__file__)), ".anthropic_batches"),
+    ))
     """服务启动时预探测模型，避免首次请求返回3个硬编码模型"""
     try:
         await _do_discover()
@@ -44,6 +47,10 @@ async def startup_discover_models():
     print("[启动] 后台清理过期会话...")
     import threading
     threading.Thread(target=_cleanup_old_sessions, daemon=True).start()
+
+    # 账号自动续期（邮箱+密码 / passToken）
+    print("[启动] 账号自动续期线程...")
+    threading.Thread(target=_auto_renew_loop, daemon=True).start()
 
 
 def _cleanup_old_sessions():
@@ -86,13 +93,65 @@ def _cleanup_old_sessions():
     asyncio.run(_run())
 
 
+def _auto_renew_loop():
+    """Periodically renew MiMo web tokens via passToken ONLY.
+
+    Never uses password login and never sends/mail-code retries.
+    If passToken is missing/invalid, mark error for user manual action.
+
+    Interval from env MIMO2API_RENEW_INTERVAL_SECONDS (default 6h).
+    First run delayed 60s after startup.
+    """
+    import time
+    import asyncio
+    import os
+
+    interval = int(os.getenv("MIMO2API_RENEW_INTERVAL_SECONDS", str(6 * 3600)))
+    time.sleep(60)
+
+    async def _renew_all():
+        from app.config import config_manager
+        from app.routes import _renew_one_account
+
+        accounts = list(config_manager.config.mimo_accounts)
+        if not accounts:
+            return
+        print(f"[AutoRenew] checking {len(accounts)} account(s) (passToken only)...")
+        for i, acc in enumerate(accounts):
+            if not getattr(acc, "auto_renew", True):
+                continue
+            if not getattr(acc, "pass_token", ""):
+                print(f"[AutoRenew] skip userId={acc.user_id}: no passToken (no auto mail-code)")
+                continue
+            try:
+                # allow_password_fallback=False: never password / never OTP send
+                result = await _renew_one_account(i, allow_password_fallback=False)
+                if result.get("ok"):
+                    print(f"[AutoRenew] ok userId={acc.user_id}")
+                else:
+                    print(f"[AutoRenew] fail userId={acc.user_id}: {result.get('error')}")
+            except Exception as e:
+                print(f"[AutoRenew] error userId={getattr(acc, 'user_id', '?')}: {e}")
+            time.sleep(3)
+
+    while True:
+        try:
+            asyncio.run(_renew_all())
+        except Exception as e:
+            print(f"[AutoRenew] loop error: {e}")
+        time.sleep(max(interval, 300))
+
+
 # 注册路由
 app.include_router(router)
 app.include_router(anthropic_router)
 
 # 初始化 Anthropic batch 存储
 import os
-_anthropic_batch_dir = os.path.join(os.path.dirname(__file__), ".anthropic_batches")
+_anthropic_batch_dir = os.getenv(
+    "MIMO2API_BATCH_DIR",
+    os.path.join(os.path.dirname(__file__), ".anthropic_batches"),
+)
 init_anthropic_batches(_anthropic_batch_dir)
 
 # 静态文件目录

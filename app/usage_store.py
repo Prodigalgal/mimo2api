@@ -1,11 +1,12 @@
 """用量统计持久化存储（JSON 文件，按模型分组 + 按日累计）"""
 
+import os
 import json
 import threading
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
 
-_USAGE_FILE = Path(__file__).parent.parent / "usage.json"
+_USAGE_FILE = Path(os.getenv("MIMO2API_USAGE_FILE", Path(__file__).parent.parent / "usage.json"))
 _LOCK = threading.Lock()
 
 

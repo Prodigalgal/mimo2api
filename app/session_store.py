@@ -8,13 +8,14 @@
   (https://github.com/GoblinHonest/mimo2api_mimoapi)
 """
 
+import os
 import json
 import hashlib
 import time
 import uuid
 from pathlib import Path
 
-SESSION_FILE = Path(__file__).parent.parent / "sessions.json"
+SESSION_FILE = Path(os.getenv("MIMO2API_SESSIONS_FILE", Path(__file__).parent.parent / "sessions.json"))
 
 # token 超限后强制清屏（MiMo 上下文 ~128K，留余量）
 TOKEN_THRESHOLD = 150000

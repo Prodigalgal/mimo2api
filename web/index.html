@@ -208,6 +208,7 @@
             <div class="tabs">
                 <div class="tab active" onclick="switchTab('curl')">cURL</div>
                 <div class="tab" onclick="switchTab('cookie')">Cookie</div>
+                <div class="tab" onclick="switchTab('email')">邮箱</div>
                 <div class="tab" onclick="switchTab('accounts')">账号</div>
                 <div class="tab" onclick="switchTab('apikey')">API Key</div>
                 <div class="tab" onclick="switchTab('usage')">用量统计</div>
@@ -241,12 +242,39 @@
                     <button id="btn-save-cookie" class="btn-primary" style="width:100%" onclick="saveCookie()">保存账号</button>
                 </div>
 
+                <!-- 谷歌邮箱+密码导入（纯 API） -->
+                <div id="panel-email" class="tab-panel">
+                    <div class="status info">使用小米账号绑定的谷歌邮箱+密码，纯 API 登录导入。<br>
+                        若触发安全验证：<b>不会自动发验证码</b>，需你点击「发送验证码」后再填写。<br>
+                        自动续期仅用 passToken，不会走密码、也不会发 mail code。</div>
+                    <div class="field"><label>邮箱（Google / Xiaomi）</label><input type="email" id="e-email" placeholder="you@gmail.com"></div>
+                    <div class="field"><label>密码</label><input type="password" id="e-pass" placeholder="小米账号密码"></div>
+                    <div class="field" id="e-otp-wrap" style="display:none">
+                        <label>邮箱验证码</label>
+                        <input type="text" id="e-otp" placeholder="6 位验证码" maxlength="8">
+                        <div class="btn-group" style="margin-top:8px">
+                            <button type="button" class="btn-outline" id="btn-send-otp" onclick="sendEmailOtp()">发送验证码</button>
+                            <button type="button" class="btn-primary" id="btn-submit-otp" onclick="importEmail()">提交验证码</button>
+                        </div>
+                    </div>
+                    <label class="toggle-row" style="margin:8px 0 12px">
+                        <span class="toggle-label">启用自动续期（仅 passToken）</span>
+                        <label class="switch">
+                            <input type="checkbox" id="e-autorenew" checked>
+                            <span class="slider"></span>
+                        </label>
+                    </label>
+                    <button id="btn-email-import" class="btn-primary" style="width:100%" onclick="importEmail()">导入账号</button>
+                    <div id="emailResult"></div>
+                </div>
+
                 <!-- 账号管理 -->
                 <div id="panel-accounts" class="tab-panel">
                     <div id="accounts"></div>
                     <div class="btn-group">
                         <button class="btn-outline" onclick="loadAccounts()">刷新</button>
                         <button class="btn-success" onclick="testAll()">测试全部</button>
+                        <button class="btn-primary" onclick="renewAll()" style="background:#0ea5e9">全部续期</button>
                         <button class="btn-primary" onclick="cleanupSessions()" style="background:#7c3aed">清理过期会话</button>
                     </div>
                 </div>
@@ -293,14 +321,15 @@
 
     <script>
 var _lang=localStorage.getItem('mimo_lang')||'zh';
-var _I={zh:{"curl":"cURL","cookie":"Cookie","accounts":"账号","apikey":"API Key","usage":"用量统计","parseCurl":"解析 cURL","parseFill":"解析填充 ↓","saveAcct":"保存账号","verifyBtn":"验证中...","saved":"已保存","saveFail":"保存失败","reqFail":"请求失败","refresh":"刷新","testAll":"测试全部","cleanupSessions":"清理过期会话","noAccts":"暂无配置账号","valid":"✅ 有效","notVerified":"⚪ 未验证","test":"测试","delete":"删除","loadFail":"加载失败","testing":"测试中...","testFail":"测试失败","noAcctTest":"无账号可测试","allTestDone":"有效","cleanup":"清理中...","cleanupFail":"清理失败: ","unknown":"未知","deleteConfirm":"确定删除此账号？","deleted":"已删除","deleteFail":"删除失败","usageNoData":"暂无用量数据","usageModel":"模型","usageReqs":"请求","usageInput":"输入","usageOutput":"输出","usageTotal":"总计","usageSum":"📋 合计","usageLoadFail":"加载失败: ","periodAll":"全部","periodWeek":"本周","periodToday":"今日","clearConfirm":"确定清空全部用量数据？此操作不可撤销。","cleared":"已清空","clearFail":"清空失败","configSaved":"配置已保存","saveConfigFail":"保存失败","parseFail":"解析失败，请检查 cURL 格式","parsing":"解析中...","parseOk":"解析成功","testConn":"测试连接","addAcct":"添加账号","connOk":"连接成功: ","connFail":"连接失败: ","acctAdded":"账号已添加","pasteCurl":"请粘贴 cURL 命令","pasteCookie":"请粘贴 Cookie 字符串","fieldsRequired":"请填写所有字段","filledFields":"已填充","filledFields2":"个字段","filledFields3":"缺少","filledFields4":"个","noValidFields":"未识别到有效字段","apiKeysLabel":"多个 Key 用逗号分隔","apiKeysPH":"sk-key1, sk-key2, sk-key3","saveConfig":"保存配置","mimoDesc":"小米 MiMo 模型 OpenAI 兼容 API","keysSaved":"配置已保存","saving":"保存中...","passthroughLabel":"工具透传模式","passthroughHint":"跳过格式说明书，直接嵌入原始工具定义（适合 Roo Code / Cline）","adminPwdLabel":"管理员密码","adminPwdPH":"默认 admin，修改后刷新需重新登录"},
-en:{"curl":"cURL","cookie":"Cookie","accounts":"Accounts","apikey":"API Key","usage":"Usage","parseCurl":"Parse cURL","parseFill":"Parse & Fill ↓","saveAcct":"Save Account","verifyBtn":"Verifying...","saved":"Saved","saveFail":"Save Failed","reqFail":"Request Failed","refresh":"Refresh","testAll":"Test All","cleanupSessions":"Cleanup Old Sessions","noAccts":"No accounts configured","valid":"✅ Active","notVerified":"⚪ Not Verified","test":"Test","delete":"Delete","loadFail":"Load Failed","testing":"Testing...","testFail":"Test Failed","noAcctTest":"No accounts to test","allTestDone":"valid","cleanup":"Cleaning...","cleanupFail":"Cleanup failed: ","unknown":"unknown","deleteConfirm":"Delete this account?","deleted":"Deleted","deleteFail":"Delete Failed","usageNoData":"No usage data","usageModel":"Model","usageReqs":"Requests","usageInput":"Input","usageOutput":"Output","usageTotal":"Total","usageSum":"📋 Total","usageLoadFail":"Load failed: ","periodAll":"All","periodWeek":"This Week","periodToday":"Today","clearConfirm":"Clear all usage data? This cannot be undone.","cleared":"Cleared","clearFail":"Clear failed","configSaved":"Config saved","saveConfigFail":"Save failed","parseFail":"Parse failed, check cURL format","parsing":"Parsing...","parseOk":"Parsed","testConn":"Test Connection","addAcct":"Add Account","connOk":"Connected: ","connFail":"Connection failed: ","acctAdded":"Account added","pasteCurl":"Please paste cURL command","pasteCookie":"Please paste Cookie string","fieldsRequired":"Please fill all fields","filledFields":"Filled","filledFields2":"field(s)","filledFields3":"missing","filledFields4":"","noValidFields":"No valid fields found","apiKeysLabel":"Separate multiple keys with commas","apiKeysPH":"sk-key1, sk-key2, sk-key3","saveConfig":"Save Config","mimoDesc":"Xiaomi MiMo OpenAI-compatible API","keysSaved":"Config saved","saving":"Saving...","passthroughLabel":"Tool Passthrough Mode","passthroughHint":"Skip format instructions, embed raw tool definitions (suitable for Roo Code / Cline)","adminPwdLabel":"Admin Password","adminPwdPH":"Default admin, refresh to re-login after change"}};
+var _I={zh:{"curl":"cURL","cookie":"Cookie","email":"邮箱","accounts":"账号","apikey":"API Key","usage":"用量统计","parseCurl":"解析 cURL","parseFill":"解析填充 ↓","saveAcct":"保存账号","verifyBtn":"验证中...","saved":"已保存","saveFail":"保存失败","reqFail":"请求失败","refresh":"刷新","testAll":"测试全部","cleanupSessions":"清理过期会话","noAccts":"暂无配置账号","valid":"✅ 有效","notVerified":"⚪ 未验证","test":"测试","delete":"删除","loadFail":"加载失败","testing":"测试中...","testFail":"测试失败","noAcctTest":"无账号可测试","allTestDone":"有效","cleanup":"清理中...","cleanupFail":"清理失败: ","unknown":"未知","deleteConfirm":"确定删除此账号？","deleted":"已删除","deleteFail":"删除失败","usageNoData":"暂无用量数据","usageModel":"模型","usageReqs":"请求","usageInput":"输入","usageOutput":"输出","usageTotal":"总计","usageSum":"📋 合计","usageLoadFail":"加载失败: ","periodAll":"全部","periodWeek":"本周","periodToday":"今日","clearConfirm":"确定清空全部用量数据？此操作不可撤销。","cleared":"已清空","clearFail":"清空失败","configSaved":"配置已保存","saveConfigFail":"保存失败","parseFail":"解析失败，请检查 cURL 格式","parsing":"解析中...","parseOk":"解析成功","testConn":"测试连接","addAcct":"添加账号","connOk":"连接成功: ","connFail":"连接失败: ","acctAdded":"账号已添加","pasteCurl":"请粘贴 cURL 命令","pasteCookie":"请粘贴 Cookie 字符串","fieldsRequired":"请填写所有字段","filledFields":"已填充","filledFields2":"个字段","filledFields3":"缺少","filledFields4":"个","noValidFields":"未识别到有效字段","apiKeysLabel":"多个 Key 用逗号分隔","apiKeysPH":"sk-key1, sk-key2, sk-key3","saveConfig":"保存配置","mimoDesc":"小米 MiMo 模型 OpenAI 兼容 API","keysSaved":"配置已保存","saving":"保存中...","passthroughLabel":"工具透传模式","passthroughHint":"跳过格式说明书，直接嵌入原始工具定义（适合 Roo Code / Cline）","adminPwdLabel":"管理员密码","adminPwdPH":"默认 admin，修改后刷新需重新登录"},
+en:{"curl":"cURL","cookie":"Cookie","email":"Email","accounts":"Accounts","apikey":"API Key","usage":"Usage","parseCurl":"Parse cURL","parseFill":"Parse & Fill ↓","saveAcct":"Save Account","verifyBtn":"Verifying...","saved":"Saved","saveFail":"Save Failed","reqFail":"Request Failed","refresh":"Refresh","testAll":"Test All","cleanupSessions":"Cleanup Old Sessions","noAccts":"No accounts configured","valid":"✅ Active","notVerified":"⚪ Not Verified","test":"Test","delete":"Delete","loadFail":"Load Failed","testing":"Testing...","testFail":"Test Failed","noAcctTest":"No accounts to test","allTestDone":"valid","cleanup":"Cleaning...","cleanupFail":"Cleanup failed: ","unknown":"unknown","deleteConfirm":"Delete this account?","deleted":"Deleted","deleteFail":"Delete Failed","usageNoData":"No usage data","usageModel":"Model","usageReqs":"Requests","usageInput":"Input","usageOutput":"Output","usageTotal":"Total","usageSum":"📋 Total","usageLoadFail":"Load failed: ","periodAll":"All","periodWeek":"This Week","periodToday":"Today","clearConfirm":"Clear all usage data? This cannot be undone.","cleared":"Cleared","clearFail":"Clear failed","configSaved":"Config saved","saveConfigFail":"Save failed","parseFail":"Parse failed, check cURL format","parsing":"Parsing...","parseOk":"Parsed","testConn":"Test Connection","addAcct":"Add Account","connOk":"Connected: ","connFail":"Connection failed: ","acctAdded":"Account added","pasteCurl":"Please paste cURL command","pasteCookie":"Please paste Cookie string","fieldsRequired":"Please fill all fields","filledFields":"Filled","filledFields2":"field(s)","filledFields3":"missing","filledFields4":"","noValidFields":"No valid fields found","apiKeysLabel":"Separate multiple keys with commas","apiKeysPH":"sk-key1, sk-key2, sk-key3","saveConfig":"Save Config","mimoDesc":"Xiaomi MiMo OpenAI-compatible API","keysSaved":"Config saved","saving":"Saving...","passthroughLabel":"Tool Passthrough Mode","passthroughHint":"Skip format instructions, embed raw tool definitions (suitable for Roo Code / Cline)","adminPwdLabel":"Admin Password","adminPwdPH":"Default admin, refresh to re-login after change"}};
 function _(k){return (_I[_lang]||_I.zh)[k]||k}
 function toggleLang(){_lang=_lang==='zh'?'en':'zh';localStorage.setItem('mimo_lang',_lang);$id('langBtn').textContent=_lang==='zh'?'🌐 EN':'🌐 中';applyI18n()}
-function applyI18n(){document.querySelectorAll('[data-i18n]').forEach(function(el){var k=el.getAttribute('data-i18n');if(k)el.textContent=_(k)});document.querySelectorAll('[data-i18n-ph]').forEach(function(el){var k=el.getAttribute('data-i18n-ph');if(k)el.placeholder=_(k)});document.querySelector('.header p').textContent=_('mimoDesc');var tabs=document.querySelectorAll('.tab');var tkeys=['curl','cookie','accounts','apikey','usage'];for(var i=0;i<5&&i<tabs.length;i++)tabs[i].textContent=_(tkeys[i])}
+function applyI18n(){document.querySelectorAll('[data-i18n]').forEach(function(el){var k=el.getAttribute('data-i18n');if(k)el.textContent=_(k)});document.querySelectorAll('[data-i18n-ph]').forEach(function(el){var k=el.getAttribute('data-i18n-ph');if(k)el.placeholder=_(k)});document.querySelector('.header p').textContent=_('mimoDesc');var tabs=document.querySelectorAll('.tab');var tkeys=['curl','cookie','email','accounts','apikey','usage'];for(var i=0;i<tkeys.length&&i<tabs.length;i++)tabs[i].textContent=_(tkeys[i])}
 document.addEventListener('DOMContentLoaded',function(){$id('langBtn').textContent=_lang==='zh'?'🌐 EN':'🌐 中';applyI18n()});
 
         let cfg = { api_keys: '', mimo_accounts: [] }, parsed = null;
+        let _emailSessionId = null;
 
         // === 工具函数 ===
         function $id(id) { return document.getElementById(id); }
@@ -314,7 +343,7 @@ document.addEventListener('DOMContentLoaded',function(){$id('langBtn').textConte
         }
         function switchTab(t) {
             document.querySelectorAll('.tab').forEach((el, i) => {
-                el.className = 'tab' + (['curl','cookie','accounts','apikey','usage'][i] === t ? ' active' : '');
+                el.className = 'tab' + (['curl','cookie','email','accounts','apikey','usage'][i] === t ? ' active' : '');
             });
             document.querySelectorAll('.tab-panel').forEach(p => p.className = 'tab-panel');
             $id('panel-' + t).className = 'tab-panel active';
@@ -465,6 +494,92 @@ document.addEventListener('DOMContentLoaded',function(){$id('langBtn').textConte
             finally { btn.disabled = false; btn.textContent = _('saveAcct'); }
         }
 
+        // === 邮箱+密码导入（mail code 需用户点击发送，不自动发/不自动重试） ===
+        async function importEmail() {
+            const btn = $id('btn-email-import');
+            const email = ($id('e-email').value || '').trim();
+            const password = $id('e-pass').value || '';
+            const otp = ($id('e-otp').value || '').trim();
+            const autoRenew = $id('e-autorenew').checked;
+            if (!_emailSessionId && (!email || !password)) {
+                toast(_('fieldsRequired'), true);
+                return;
+            }
+            if (_emailSessionId && !otp) {
+                toast('请先发送并填写邮箱验证码', true);
+                return;
+            }
+            btn.disabled = true;
+            btn.textContent = _('verifyBtn');
+            try {
+                const body = { email, password, auto_renew: autoRenew };
+                if (_emailSessionId) {
+                    body.session_id = _emailSessionId;
+                    body.otp_code = otp;
+                }
+                const r = await fetch('/api/account/import-email', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(body),
+                });
+                const d = await r.json();
+                if (d.need_otp) {
+                    _emailSessionId = d.session_id;
+                    $id('e-otp-wrap').style.display = 'block';
+                    $id('btn-email-import').style.display = 'none';
+                    showStatus('emailResult', 'info', d.message || '需要邮箱验证：请点击「发送验证码」，不会自动发码');
+                    toast(d.message || '需要邮箱验证码（请手动发送）');
+                } else if (d.ok) {
+                    _emailSessionId = null;
+                    $id('e-otp-wrap').style.display = 'none';
+                    $id('btn-email-import').style.display = 'block';
+                    $id('e-otp').value = '';
+                    showStatus('emailResult', 'success', '已导入 userId=' + d.user_id);
+                    toast(_('acctAdded'));
+                    loadAccounts();
+                    loadConfig();
+                } else {
+                    showStatus('emailResult', 'error', d.error || '导入失败');
+                    toast(d.error || '导入失败', true);
+                }
+            } catch (e) {
+                toast(_('reqFail'), true);
+            } finally {
+                btn.disabled = false;
+                btn.textContent = '导入账号';
+            }
+        }
+
+        async function sendEmailOtp() {
+            if (!_emailSessionId) {
+                toast('请先点击导入账号，进入验证流程后再发送', true);
+                return;
+            }
+            const btn = $id('btn-send-otp');
+            btn.disabled = true;
+            btn.textContent = '发送中...';
+            try {
+                const r = await fetch('/api/account/send-email-otp', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ session_id: _emailSessionId }),
+                });
+                const d = await r.json();
+                if (d.ok) {
+                    showStatus('emailResult', 'success', d.message || '验证码已发送');
+                    toast(d.already_sent ? '本会话已发过码，不会自动重发' : '验证码已发送');
+                } else {
+                    showStatus('emailResult', 'error', d.error || '发送失败');
+                    toast(d.error || '发送失败', true);
+                }
+            } catch (e) {
+                toast(_('reqFail'), true);
+            } finally {
+                btn.disabled = false;
+                btn.textContent = '发送验证码';
+            }
+        }
+
         // === 账号管理 ===
         async function loadAccounts() {
             try {
@@ -483,9 +598,12 @@ document.addEventListener('DOMContentLoaded',function(){$id('langBtn').textConte
                             ${a.is_valid ? '<span style="color:#22c55e;margin-left:8px;font-size:12px">'+_('valid')+'</span>' : '<span style="color:#94a3b8;margin-left:8px;font-size:12px">'+_('notVerified')+'</span>'}
                             ${a.last_test ? '<span style="color:var(--text-muted);margin-left:4px;font-size:11px">· ' + a.last_test + '</span>' : ''}
                         </div>
+                        ${a.email ? '<div class="info-line"><b>email:</b> <code>'+a.email+'</code>'+(a.auto_renew?' <span style="color:#38bdf8;font-size:11px">· 自动续期</span>':'')+(a.has_pass_token?' <span style="color:#a78bfa;font-size:11px">· passToken</span>':'')+'</div>' : ''}
                         <div class="info-line"><b>token:</b> <code>${a.token_masked}</code></div>
+                        ${a.last_renew ? '<div class="info-line"><b>renew:</b> '+a.last_renew+(a.renew_error?' <span style="color:#f87171">'+a.renew_error+'</span>':'')+'</div>' : ''}
                         <div class="actions">
                             <button class="btn-outline" onclick="testAcct(${i})">测试</button>
+                            <button class="btn-outline" onclick="renewAcct(${i})" style="border-color:#0ea5e9;color:#7dd3fc">续期</button>
                             <button class="btn-danger" onclick="delAcct(${i})">删除</button>
                         </div>
                     </div>
@@ -493,6 +611,62 @@ document.addEventListener('DOMContentLoaded',function(){$id('langBtn').textConte
             } catch (e) {
                 $id('accounts').innerHTML = '<div class="empty">加载失败</div>';
             }
+        }
+
+        async function renewAcct(i) {
+            const btn = event.target;
+            btn.disabled = true;
+            btn.textContent = '续期中...';
+            try {
+                // 默认仅 passToken；失败时再询问是否用密码（可能要 mail code，且不自动发）
+                let r = await fetch('/api/accounts/' + i + '/renew', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ allow_password: false }),
+                });
+                let d = await r.json();
+                if (!d.ok && d.need_manual) {
+                    if (confirm('passToken 续期失败。是否改用邮箱密码手动续期？\n（若需验证码：不会自动发送，需你点击发送后再填）')) {
+                        r = await fetch('/api/accounts/' + i + '/renew', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ allow_password: true }),
+                        });
+                        d = await r.json();
+                    }
+                }
+                if (d.need_otp && d.session_id) {
+                    _emailSessionId = d.session_id;
+                    switchTab('email');
+                    $id('e-otp-wrap').style.display = 'block';
+                    $id('btn-email-import').style.display = 'none';
+                    showStatus('emailResult', 'info', d.message || '需要邮箱验证码：请点「发送验证码」后填写');
+                    toast('需要邮箱验证码，请手动发送');
+                } else {
+                    toast(d.ok ? '续期成功: ' + (d.user_id || '') : ('续期失败: ' + (d.error || '')), !d.ok);
+                }
+                loadAccounts();
+            } catch (e) { toast(_('reqFail'), true); }
+            btn.disabled = false;
+            btn.textContent = '续期';
+        }
+
+        async function renewAll() {
+            const btn = event.target;
+            btn.disabled = true;
+            btn.textContent = '续期中...';
+            try {
+                // 全部续期 = 自动策略：仅 passToken，不发 mail code
+                const r = await fetch('/api/accounts/renew-all', { method: 'POST' });
+                const d = await r.json();
+                const results = d.results || [];
+                const ok = results.filter(x => x.ok).length;
+                const need = results.filter(x => x.need_manual || x.skipped).length;
+                toast('续期完成: ' + ok + ' 成功（仅 passToken；需验证码的请手动处理）');
+                loadAccounts();
+            } catch (e) { toast(_('reqFail'), true); }
+            btn.disabled = false;
+            btn.textContent = '全部续期';
         }
 
         async function testAcct(i) {

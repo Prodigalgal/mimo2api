@@ -5,4 +5,7 @@ sessions.json
 usage.json
 app/responses.json
 test_tts.wav
-usage.json
+local-debug/
+*.har
+login*.png
+.xiaomi_login_*

@@ -1,10 +1,11 @@
 """Local persistence for Responses API compatibility state."""
 
+import os
 import json
 import threading
 from pathlib import Path
 
-_STORE_FILE = Path(__file__).parent / "responses.json"
+_STORE_FILE = Path(os.getenv("MIMO2API_RESPONSES_FILE", Path(__file__).parent / "responses.json"))
 _LOCK = threading.Lock()
 
 

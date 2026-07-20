@@ -1126,6 +1126,12 @@ async def list_accounts(username: str = Depends(verify_admin)):
             "is_valid": acc.is_valid,
             "login_time": acc.login_time,
             "last_test": acc.last_test,
+            "email": acc.email or "",
+            "auto_renew": bool(getattr(acc, "auto_renew", True)),
+            "last_renew": getattr(acc, "last_renew", "") or "",
+            "renew_error": getattr(acc, "renew_error", "") or "",
+            "has_password": bool(getattr(acc, "password", "")),
+            "has_pass_token": bool(getattr(acc, "pass_token", "")),
         })
     return {"accounts": accounts}
 
@@ -1175,39 +1181,332 @@ async def import_curl(request: Request, username: str = Depends(verify_admin)):
     return await _validate_and_save(st_m.group(1), uid_m.group(1), ph_m.group(1))
 
 
-async def _validate_and_save(service_token: str, user_id: str, xiaomichatbot_ph: str):
+async def _validate_and_save(
+    service_token: str,
+    user_id: str,
+    xiaomichatbot_ph: str,
+    *,
+    email: str = "",
+    password: str = "",
+    pass_token: str = "",
+    c_user_id: str = "",
+    device_id: str = "",
+    auto_renew: bool = True,
+    skip_live_check: bool = False,
+):
     from .mimo_client import MimoClient, MimoApiError
 
-    account = MimoAccount(service_token=service_token, user_id=user_id, xiaomichatbot_ph=xiaomichatbot_ph)
-    client = MimoClient(account)
+    now = _dt.now().strftime("%m-%d %H:%M")
+    content = ""
 
-    try:
-        content, _, _ = await client.call_api("hi", False)
-        now = _dt.now().strftime("%m-%d %H:%M")
+    if not skip_live_check:
+        account = MimoAccount(
+            service_token=service_token,
+            user_id=user_id,
+            xiaomichatbot_ph=xiaomichatbot_ph,
+        )
+        client = MimoClient(account)
+        try:
+            content, _, _ = await client.call_api("hi", False, model="mimo-v2.5-pro")
+        except MimoApiError as e:
+            # model-name / business errors with HTTP 200 path are raised differently;
+            # HTTP 401/403 means bad token
+            if e.status_code in (401, 403):
+                return {"ok": False, "error": f"验证失败 (HTTP {e.status_code}): {e.response_body[:100]}"}
+            content = e.response_body[:100]
+        except Exception as e:
+            return {"ok": False, "error": f"验证失败: {str(e)[:100]}"}
 
-        existing = False
+    # merge with existing secrets when updating same user
+    prev = None
+    for acc in config_manager.config.mimo_accounts:
+        if acc.user_id == user_id:
+            prev = acc
+            break
+
+    new_acc = MimoAccount(
+        service_token=service_token,
+        user_id=user_id,
+        xiaomichatbot_ph=xiaomichatbot_ph,
+        login_time=now,
+        is_valid=True,
+        email=email or (prev.email if prev else ""),
+        password=password or (prev.password if prev else ""),
+        pass_token=pass_token or (prev.pass_token if prev else ""),
+        c_user_id=c_user_id or (prev.c_user_id if prev else ""),
+        device_id=device_id or (prev.device_id if prev else ""),
+        auto_renew=auto_renew if prev is None else (auto_renew if email or password or pass_token else prev.auto_renew),
+        last_renew=now if (pass_token or password or email) else (prev.last_renew if prev else ""),
+        last_test=now if content else (prev.last_test if prev else ""),
+        renew_error="",
+    )
+
+    if prev is not None:
         for i, acc in enumerate(config_manager.config.mimo_accounts):
             if acc.user_id == user_id:
-                config_manager.config.mimo_accounts[i] = MimoAccount(
-                    service_token=service_token, user_id=user_id,
-                    xiaomichatbot_ph=xiaomichatbot_ph,
-                    login_time=now, is_valid=True,
-                )
-                existing = True
+                config_manager.config.mimo_accounts[i] = new_acc
                 break
-        if not existing:
-            config_manager.config.mimo_accounts.append(MimoAccount(
-                service_token=service_token, user_id=user_id,
-                xiaomichatbot_ph=xiaomichatbot_ph,
-                login_time=now, is_valid=True,
-            ))
-        config_manager.save()
-        return {"ok": True, "user_id": user_id, "response": content[:100]}
+    else:
+        config_manager.config.mimo_accounts.append(new_acc)
+    config_manager.save()
+    return {"ok": True, "user_id": user_id, "response": (content or "saved")[:100]}
 
-    except MimoApiError as e:
-        return {"ok": False, "error": f"验证失败 (HTTP {e.status_code}): {e.response_body[:100]}"}
+
+@router.post("/api/account/import-email")
+async def import_email(request: Request, username: str = Depends(verify_admin)):
+    """Import MiMo account via Xiaomi Google-email + password (pure API).
+
+    Body:
+      email, password
+      session_id? + otp_code?  (submit mail code after user clicked send)
+      auto_renew? (default true)
+
+    Mail code is never auto-sent. After need_otp, call /api/account/send-email-otp.
+    """
+    try:
+        data = await request.json()
+    except Exception:
+        raise HTTPException(400, "invalid json")
+
+    email = (data.get("email") or "").strip()
+    password = data.get("password") or ""
+    otp_code = (data.get("otp_code") or data.get("ticket") or "").strip() or None
+    session_id = (data.get("session_id") or "").strip() or None
+    auto_renew = data.get("auto_renew", True)
+
+    if not session_id and (not email or not password):
+        return {"ok": False, "error": "请提供邮箱和密码"}
+
+    from .xiaomi_login import login_with_password, XiaomiLoginError
+
+    # pull password from pending session when completing OTP
+    saved_password = ""
+    if session_id:
+        try:
+            from .xiaomi_login import _PENDING
+            pending = _PENDING.get(session_id)
+            if pending:
+                saved_password = pending.password
+                if not email:
+                    email = pending.email
+        except Exception:
+            pass
+
+    try:
+        result = await login_with_password(
+            email,
+            password or saved_password,
+            otp_code=otp_code,
+            session_id=session_id,
+        )
+    except XiaomiLoginError as e:
+        return {"ok": False, "error": str(e), "code": e.code, "data": e.data}
     except Exception as e:
-        return {"ok": False, "error": f"验证失败: {str(e)[:100]}"}
+        return {"ok": False, "error": f"登录失败: {str(e)[:200]}"}
+
+    if result.get("need_otp"):
+        return {"ok": False, **{k: v for k, v in result.items() if k != "ok"}}
+
+    tokens = result.get("tokens") or {}
+    final_password = password or saved_password
+
+    return await _validate_and_save(
+        tokens.get("service_token", ""),
+        tokens.get("user_id", ""),
+        tokens.get("xiaomichatbot_ph", ""),
+        email=tokens.get("email") or email,
+        password=final_password,
+        pass_token=tokens.get("pass_token", ""),
+        c_user_id=tokens.get("c_user_id", ""),
+        device_id=tokens.get("device_id", ""),
+        auto_renew=bool(auto_renew),
+        skip_live_check=False,
+    )
+
+
+@router.post("/api/account/send-email-otp")
+async def send_email_otp(request: Request, username: str = Depends(verify_admin)):
+    """User-triggered send of mail code for a pending import/renew session.
+
+    Body: { "session_id": "..." }
+    Never called by auto-renew. Same session will not auto-resend.
+    """
+    try:
+        data = await request.json()
+    except Exception:
+        raise HTTPException(400, "invalid json")
+    session_id = (data.get("session_id") or "").strip()
+    if not session_id:
+        return {"ok": False, "error": "缺少 session_id"}
+
+    from .xiaomi_login import send_pending_email_otp, XiaomiLoginError
+
+    try:
+        return await send_pending_email_otp(session_id)
+    except XiaomiLoginError as e:
+        return {"ok": False, "error": str(e), "code": e.code, "data": e.data}
+    except Exception as e:
+        return {"ok": False, "error": f"发送失败: {str(e)[:200]}"}
+
+
+@router.post("/api/accounts/{idx}/renew")
+async def renew_account(idx: int, request: Request, username: str = Depends(verify_admin)):
+    """Manually renew one account.
+
+    Query/body:
+      allow_password=1  — allow password fallback (may return need_otp; user must send code)
+      session_id + otp_code — complete OTP for manual password renew
+    Default: passToken only (same as auto-renew safety for click-without-intent).
+    """
+    accounts = config_manager.config.mimo_accounts
+    if idx < 0 or idx >= len(accounts):
+        raise HTTPException(404, "account not found")
+
+    allow_password = False
+    session_id = None
+    otp_code = None
+    try:
+        data = await request.json()
+        if isinstance(data, dict):
+            allow_password = bool(data.get("allow_password") or data.get("use_password"))
+            session_id = (data.get("session_id") or "").strip() or None
+            otp_code = (data.get("otp_code") or data.get("ticket") or "").strip() or None
+    except Exception:
+        pass
+    # also accept query flag
+    if request.query_params.get("allow_password") in ("1", "true", "yes"):
+        allow_password = True
+
+    return await _renew_one_account(
+        idx,
+        allow_password_fallback=allow_password,
+        session_id=session_id,
+        otp_code=otp_code,
+    )
+
+
+async def _renew_one_account(
+    idx: int,
+    *,
+    allow_password_fallback: bool = False,
+    session_id: Optional[str] = None,
+    otp_code: Optional[str] = None,
+) -> dict:
+    """Renew account. Auto path: passToken only, never send mail code / never password."""
+    accounts = config_manager.config.mimo_accounts
+    if idx < 0 or idx >= len(accounts):
+        return {"ok": False, "error": "account not found"}
+    acc = accounts[idx]
+    from .xiaomi_login import renew_with_password, login_with_password, XiaomiLoginError
+
+    # Completing a pending OTP for this account's manual renew
+    if session_id and otp_code:
+        try:
+            result = await login_with_password(
+                acc.email,
+                acc.password,
+                otp_code=otp_code,
+                session_id=session_id,
+            )
+        except XiaomiLoginError as e:
+            acc.renew_error = str(e)[:200]
+            acc.last_renew = _dt.now().strftime("%m-%d %H:%M")
+            config_manager.save()
+            return {"ok": False, "error": str(e), "need_otp": True, "session_id": session_id}
+
+        if result.get("need_otp"):
+            return {"ok": False, **{k: v for k, v in result.items() if k != "ok"}}
+        tokens = result.get("tokens") or {}
+        return await _validate_and_save(
+            tokens.get("service_token", ""),
+            tokens.get("user_id", "") or acc.user_id,
+            tokens.get("xiaomichatbot_ph", ""),
+            email=acc.email or tokens.get("email", ""),
+            password=acc.password,
+            pass_token=tokens.get("pass_token", "") or acc.pass_token,
+            c_user_id=tokens.get("c_user_id", "") or acc.c_user_id,
+            device_id=tokens.get("device_id", "") or acc.device_id,
+            auto_renew=acc.auto_renew,
+        )
+
+    if not acc.pass_token and not (allow_password_fallback and acc.email and acc.password):
+        acc.renew_error = "缺少 passToken，自动续期不可用；请手动导入或密码续期"
+        acc.last_renew = _dt.now().strftime("%m-%d %H:%M")
+        config_manager.save()
+        return {
+            "ok": False,
+            "error": acc.renew_error,
+            "need_manual": True,
+        }
+
+    try:
+        result = await renew_with_password(
+            acc.email,
+            acc.password,
+            device_id=acc.device_id or None,
+            pass_token=acc.pass_token,
+            user_id=acc.user_id,
+            c_user_id=acc.c_user_id,
+            allow_password_fallback=allow_password_fallback,
+        )
+    except XiaomiLoginError as e:
+        acc.is_valid = False
+        acc.renew_error = str(e)[:200]
+        acc.last_renew = _dt.now().strftime("%m-%d %H:%M")
+        config_manager.save()
+        return {"ok": False, "error": str(e), "data": e.data, "need_manual": True}
+
+    if result.get("need_otp"):
+        # Password path hit identity check — hand off to user, do not auto-send
+        acc.renew_error = "需要邮箱验证码，请点击发送验证码后填写（系统不会自动发码）"
+        acc.last_renew = _dt.now().strftime("%m-%d %H:%M")
+        config_manager.save()
+        return {
+            "ok": False,
+            "need_otp": True,
+            "session_id": result.get("session_id"),
+            "otp_sent": result.get("otp_sent", False),
+            "email": result.get("email") or acc.email,
+            "message": result.get("message") or acc.renew_error,
+            "user_id": acc.user_id,
+        }
+
+    tokens = result.get("tokens") or {}
+    if not result.get("ok") or not tokens:
+        return {"ok": False, "error": "续期失败", "data": result}
+
+    return await _validate_and_save(
+        tokens.get("service_token", ""),
+        tokens.get("user_id", "") or acc.user_id,
+        tokens.get("xiaomichatbot_ph", ""),
+        email=acc.email or tokens.get("email", ""),
+        password=acc.password,
+        pass_token=tokens.get("pass_token", "") or acc.pass_token,
+        c_user_id=tokens.get("c_user_id", "") or acc.c_user_id,
+        device_id=tokens.get("device_id", "") or acc.device_id,
+        auto_renew=acc.auto_renew,
+    )
+
+
+@router.post("/api/accounts/renew-all")
+async def renew_all_accounts(username: str = Depends(verify_admin)):
+    """Auto-style renew-all: passToken only, never password/mail code."""
+    results = []
+    for i, acc in enumerate(list(config_manager.config.mimo_accounts)):
+        if not acc.auto_renew:
+            results.append({"idx": i, "user_id": acc.user_id, "skipped": True, "reason": "auto_renew off"})
+            continue
+        if not acc.pass_token:
+            results.append({
+                "idx": i,
+                "user_id": acc.user_id,
+                "skipped": True,
+                "reason": "no passToken (auto-renew never uses password/OTP)",
+            })
+            continue
+        r = await _renew_one_account(i, allow_password_fallback=False)
+        results.append({"idx": i, "user_id": acc.user_id, **r})
+    return {"results": results}
 
 
 @router.delete("/api/accounts/{idx}")
