@@ -1822,41 +1822,55 @@ async def renew_account(idx: int, request: Request, username: str = Depends(veri
     """Manually renew one account.
 
     Query/body:
-      allow_password=1  — allow password fallback (may return need_otp; user must send code)
+      allow_password=1  — allow password fallback (may return need_otp)
+      auto_temp_mail=1  — if mail_jwt present, auto send+read OTP from temp mail
       session_id + otp_code — complete OTP for manual password renew
-    Default: passToken only (same as auto-renew safety for click-without-intent).
+
+    Default for accounts with mail_jwt: auto_temp_mail on (registered via temp mail).
     """
     accounts = config_manager.config.mimo_accounts
     if idx < 0 or idx >= len(accounts):
         raise HTTPException(404, "account not found")
 
+    acc = accounts[idx]
     allow_password = False
+    auto_temp_mail = bool(getattr(acc, "mail_jwt", ""))
     session_id = None
     otp_code = None
     try:
         data = await request.json()
         if isinstance(data, dict):
             allow_password = bool(data.get("allow_password") or data.get("use_password"))
+            if "auto_temp_mail" in data or "auto_temp_mail_otp" in data:
+                auto_temp_mail = bool(data.get("auto_temp_mail") or data.get("auto_temp_mail_otp"))
             session_id = (data.get("session_id") or "").strip() or None
             otp_code = (data.get("otp_code") or data.get("ticket") or "").strip() or None
     except Exception:
         pass
-    # also accept query flag
     if request.query_params.get("allow_password") in ("1", "true", "yes"):
         allow_password = True
+    if request.query_params.get("auto_temp_mail") in ("0", "false", "no"):
+        auto_temp_mail = False
+    if request.query_params.get("auto_temp_mail") in ("1", "true", "yes"):
+        auto_temp_mail = True
 
     return await _renew_one_account(
         idx,
-        allow_password_fallback=allow_password,
+        allow_password_fallback=allow_password or auto_temp_mail,
         session_id=session_id,
         otp_code=otp_code,
+        auto_temp_mail_otp=auto_temp_mail,
     )
 
 
 async def _renew_with_temp_mail_otp(acc, session_id: str) -> dict:
-    """Send OTP + poll temp mail + complete login. Requires acc.mail_jwt + temp_mail config."""
+    """Send OTP + poll temp mail for NEW code + complete login.
+
+    Requires: acc.email/password/mail_jwt + global temp_mail API config.
+    Used for auto-registered accounts after passToken/serviceToken expire.
+    """
     from .xiaomi_login import send_pending_email_otp, login_with_password, XiaomiLoginError
-    from .temp_mail import wait_for_code, TempMailError
+    from .temp_mail import wait_for_code, list_parsed_mails, TempMailError
 
     mail_cfg = _mail_cfg_from_settings()
     if not mail_cfg.is_configured() or not getattr(acc, "mail_jwt", ""):
@@ -1867,10 +1881,33 @@ async def _renew_with_temp_mail_otp(acc, session_id: str) -> dict:
             "error": "需要邮箱验证码，但未配置临时邮箱或账号缺少 mail_jwt，无法自动取码",
             "auto_otp": False,
         }
+    if not acc.email or not acc.password:
+        return {
+            "ok": False,
+            "error": "账号缺少邮箱或密码，无法走 temp-mail 自动重登",
+            "auto_otp": False,
+        }
 
     try:
+        # Ignore mails already in inbox so we only accept the newly sent OTP
+        seen_ids: set = set()
+        try:
+            for m in await list_parsed_mails(mail_cfg, acc.mail_jwt, limit=30, offset=0):
+                mid = m.get("id") or m.get("message_id")
+                if mid is not None:
+                    seen_ids.add(mid)
+        except Exception:
+            pass
+
         await send_pending_email_otp(session_id)
-        code = await wait_for_code(mail_cfg, acc.mail_jwt, timeout=120.0)
+        print(f"[AutoRenew] OTP sent, waiting temp-mail for {acc.email}...")
+        code = await wait_for_code(
+            mail_cfg,
+            acc.mail_jwt,
+            timeout=120.0,
+            seen_ids=seen_ids,
+        )
+        print(f"[AutoRenew] got mail code for {acc.email}, completing login...")
         result = await login_with_password(
             acc.email,
             acc.password,
@@ -1879,7 +1916,7 @@ async def _renew_with_temp_mail_otp(acc, session_id: str) -> dict:
         )
         if result.get("ok") and result.get("tokens"):
             tokens = result["tokens"]
-            return await _validate_and_save(
+            saved = await _validate_and_save(
                 tokens.get("service_token", ""),
                 tokens.get("user_id", "") or acc.user_id,
                 tokens.get("xiaomichatbot_ph", ""),
@@ -1888,10 +1925,14 @@ async def _renew_with_temp_mail_otp(acc, session_id: str) -> dict:
                 pass_token=tokens.get("pass_token", "") or acc.pass_token,
                 c_user_id=tokens.get("c_user_id", "") or acc.c_user_id,
                 device_id=tokens.get("device_id", "") or acc.device_id,
-                auto_renew=acc.auto_renew,
+                auto_renew=True if acc.auto_renew is None else acc.auto_renew,
                 mail_jwt=acc.mail_jwt,
                 region=acc.region,
             )
+            if saved.get("ok"):
+                saved["auto_otp"] = True
+                saved["via"] = "temp_mail_otp"
+            return saved
         return {"ok": False, "error": "验证码登录失败", "data": result, "auto_otp": True}
     except (XiaomiLoginError, TempMailError) as e:
         return {
@@ -2069,21 +2110,74 @@ async def delete_account(idx: int, username: str = Depends(verify_admin)):
 
 @router.post("/api/accounts/{idx}/test")
 async def test_account(idx: int, username: str = Depends(verify_admin)):
+    """Test account; if auth fails and temp-mail path available, try auto-renew once."""
     accounts = config_manager.config.mimo_accounts
     if idx < 0 or idx >= len(accounts):
         raise HTTPException(404, "account not found")
 
     from .mimo_client import MimoClient, MimoApiError
     acc = accounts[idx]
-    client = MimoClient(acc)
+
+    async def _probe():
+        client = MimoClient(acc)
+        content, _, _ = await client.call_api("hi", False)
+        return content
 
     try:
-        content, _, _ = await client.call_api("hi", False)
+        content = await _probe()
         acc.is_valid = True
         acc.last_test = _dt.now().strftime("%m-%d %H:%M")
         config_manager.save()
-        return {"ok": True, "response": content[:200]}
+        return {"ok": True, "response": (content or "")[:200]}
     except MimoApiError as e:
+        # serviceToken 失效：有 mail_jwt 则自动 passToken/密码+temp-mail 续期后再测
+        can_auto = bool(
+            getattr(acc, "auto_renew", True)
+            and (
+                getattr(acc, "pass_token", "")
+                or (
+                    acc.email
+                    and acc.password
+                    and getattr(acc, "mail_jwt", "")
+                )
+            )
+        )
+        if e.status_code in (401, 403) and can_auto:
+            renew = await _renew_one_account(
+                idx,
+                allow_password_fallback=False,
+                auto_temp_mail_otp=True,
+            )
+            if renew.get("ok"):
+                # reload account after save
+                acc = config_manager.config.mimo_accounts[idx]
+                try:
+                    content = await _probe()
+                    acc.is_valid = True
+                    acc.last_test = _dt.now().strftime("%m-%d %H:%M")
+                    config_manager.save()
+                    return {
+                        "ok": True,
+                        "response": (content or "")[:200],
+                        "auto_renewed": True,
+                        "via": renew.get("via") or "renew",
+                    }
+                except Exception as e2:
+                    acc.is_valid = False
+                    config_manager.save()
+                    return {
+                        "ok": False,
+                        "error": f"续期后仍失败: {str(e2)[:120]}",
+                        "auto_renewed": True,
+                    }
+            acc.is_valid = False
+            acc.last_test = _dt.now().strftime("%m-%d %H:%M")
+            config_manager.save()
+            return {
+                "ok": False,
+                "error": f"HTTP {e.status_code}: {e.response_body[:80]}",
+                "renew_error": renew.get("error") or renew.get("message"),
+            }
         acc.is_valid = False
         acc.last_test = _dt.now().strftime("%m-%d %H:%M")
         config_manager.save()

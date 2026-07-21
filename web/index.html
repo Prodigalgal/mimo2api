@@ -1136,7 +1136,7 @@ let cfg = { api_keys: '', mimo_accounts: [] }, parsed = null;
                             ${a.is_valid ? '<span style="color:#22c55e;margin-left:8px;font-size:12px">'+'✅ 有效'+'</span>' : '<span style="color:#94a3b8;margin-left:8px;font-size:12px">'+'⚪ 未验证'+'</span>'}
                             ${a.last_test ? '<span style="color:var(--text-muted);margin-left:4px;font-size:11px">· ' + a.last_test + '</span>' : ''}
                         </div>
-                        ${a.email ? '<div class="info-line"><b>email:</b> <code>'+a.email+'</code>'+(a.auto_renew?' <span style="color:#38bdf8;font-size:11px">· 自动续期</span>':'')+(a.has_pass_token?' <span style="color:#a78bfa;font-size:11px">· passToken</span>':'')+(a.has_mail_jwt?' <span style="color:#34d399;font-size:11px">· temp-mail</span>':'')+(a.region?' <span style="color:var(--text-muted);font-size:11px">· '+a.region+'</span>':'')+'</div>' : ''}
+                        ${a.email ? '<div class="info-line"><b>email:</b> <code>'+a.email+'</code>'+(a.auto_renew?' <span style="color:#38bdf8;font-size:11px">· 自动续期</span>':'')+(a.has_pass_token?' <span style="color:#a78bfa;font-size:11px">· passToken</span>':'')+(a.has_mail_jwt?' <span style="color:#34d399;font-size:11px" title="过期后可用临时邮箱自动取码重登">· temp-mail自动重登</span>':'')+(a.region?' <span style="color:var(--text-muted);font-size:11px">· '+a.region+'</span>':'')+'</div>' : ''}
                         <div class="info-line"><b>token:</b> <code>${a.token_masked}</code></div>
                         ${a.last_renew ? '<div class="info-line"><b>renew:</b> '+a.last_renew+(a.renew_error?' <span style="color:#f87171">'+a.renew_error+'</span>':'')+'</div>' : ''}
                         <div class="actions">

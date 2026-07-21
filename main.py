@@ -96,9 +96,9 @@ def _cleanup_old_sessions():
 def _auto_renew_loop():
     """Periodically renew MiMo web tokens (keep-alive).
 
-    1) passToken renew first
-    2) if fail and account has email+password+mail_jwt and temp-mail configured:
-       password login → send OTP → auto-read code from temp mail → re-login
+    For accounts created via temp-mail auto-register (have mail_jwt):
+      1) passToken renew
+      2) on failure: email+password login → send OTP → auto-read code from temp mail → re-login
 
     Interval from env MIMO2API_RENEW_INTERVAL_SECONDS (default 6h).
     First run delayed 60s after startup.
@@ -117,7 +117,10 @@ def _auto_renew_loop():
         accounts = list(config_manager.config.mimo_accounts)
         if not accounts:
             return
-        print(f"[AutoRenew] checking {len(accounts)} account(s) (passToken + temp-mail OTP fallback)...")
+        print(
+            f"[AutoRenew] checking {len(accounts)} account(s) "
+            f"(passToken → password+temp-mail OTP)..."
+        )
         for i, acc in enumerate(accounts):
             if not getattr(acc, "auto_renew", True):
                 continue
@@ -128,18 +131,26 @@ def _auto_renew_loop():
                 and getattr(acc, "mail_jwt", "")
             )
             if not has_pt and not has_mail_path:
-                print(f"[AutoRenew] skip userId={acc.user_id}: no passToken and no mail_jwt path")
+                print(
+                    f"[AutoRenew] skip userId={acc.user_id}: "
+                    f"no passToken and no temp-mail path (email/password/mail_jwt)"
+                )
                 continue
             try:
+                # Always allow temp-mail OTP for registered accounts when passToken fails
                 result = await _renew_one_account(
                     i,
                     allow_password_fallback=False,
                     auto_temp_mail_otp=True,
                 )
                 if result.get("ok"):
-                    print(f"[AutoRenew] ok userId={acc.user_id}")
+                    via = result.get("via") or ("temp_mail_otp" if result.get("auto_otp") else "passToken")
+                    print(f"[AutoRenew] ok userId={acc.user_id} via={via}")
                 else:
-                    print(f"[AutoRenew] fail userId={acc.user_id}: {result.get('error') or result.get('message')}")
+                    print(
+                        f"[AutoRenew] fail userId={acc.user_id}: "
+                        f"{result.get('error') or result.get('message')}"
+                    )
             except Exception as e:
                 print(f"[AutoRenew] error userId={getattr(acc, 'user_id', '?')}: {e}")
             time.sleep(3)

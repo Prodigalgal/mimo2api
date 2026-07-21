@@ -240,11 +240,26 @@ curl http://localhost:8080/v1/chat/completions \
 
 ---
 
-## 账号保活
+## 账号保活（含自动注册账号过期重登）
 
-- 后台定时用 **passToken** 换新的 aistudio `serviceToken`  
-- passToken 失效且账号存有 `email + password + mail_jwt` 时：  
-  密码登录 → 发邮件验证码 → **从临时邮箱自动取码** → 重新登录  
+自动注册成功的账号会写入：`email`、`password`、`pass_token`、`mail_jwt`、`auto_renew=true`。
+
+后台保活顺序：
+
+1. **passToken** 换新 aistudio `serviceToken`（无需邮件）  
+2. passToken 失效时：邮箱+密码登录  
+3. 若小米要求二次验证：自动发码 → **用该账号的 `mail_jwt` 从临时邮箱取最新验证码** → 完成登录并更新 token  
+
+条件：
+
+- 全局「临时邮箱」API 配置可用  
+- 账号带有 `mail_jwt`（自动注册会自动保存）  
+- 账号 `auto_renew` 为 true  
+
+面板操作：
+
+- **续期**：有 temp-mail 标记的账号会自动走取码重登  
+- **测试**：若返回 401/403，会先尝试自动续期再测一次  
 
 环境变量（可选）：
 
