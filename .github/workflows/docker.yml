@@ -13,6 +13,7 @@ concurrency:
 
 env:
   IMAGE_NAME: speedproxy/mimo2api
+  IMAGE_TAG: sha-${{ github.sha }}
 
 jobs:
   build:
@@ -58,3 +59,52 @@ jobs:
           cache-to: type=gha,mode=max
           provenance: mode=max
           sbom: true
+
+  update-gitops:
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    needs: build
+    runs-on: ubuntu-24.04
+    concurrency:
+      group: mimo2api-gitops-production
+      cancel-in-progress: false
+    steps:
+      - name: Checkout GitOps source of truth
+        uses: actions/checkout@v4
+        with:
+          repository: Prodigalgal/ircs-prod-config
+          ref: main
+          ssh-key: ${{ secrets.MIMO2API_GITOPS_DEPLOY_KEY }}
+          persist-credentials: false
+          fetch-depth: 0
+          path: gitops
+
+      - uses: imranismail/setup-kustomize@v2
+
+      - name: Refresh GitOps checkout
+        working-directory: gitops
+        run: |
+          git fetch origin main
+          git checkout main
+          git pull --ff-only origin main
+
+      - name: Update immutable image pin
+        run: |
+          cd gitops/mimo2api/oracle
+          kustomize edit set image \
+            ghcr.io/example/mimo2api=${IMAGE_NAME}:${IMAGE_TAG}
+          kustomize build . >/tmp/mimo2api-rendered.yaml
+
+      - name: Commit GitOps revision
+        working-directory: gitops
+        run: |
+          if git diff --quiet -- mimo2api/oracle/kustomization.yaml; then
+            echo "GitOps image is already current"
+            exit 0
+          fi
+          git config user.name "mimo2api-ci"
+          git config user.email "mimo2api-ci@users.noreply.github.com"
+          git add mimo2api/oracle/kustomization.yaml
+          git commit -m "deploy(mimo2api): ${IMAGE_TAG}"
+          git fetch origin main
+          git rebase origin/main
+          git push origin HEAD:main
