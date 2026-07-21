@@ -140,10 +140,16 @@ class ProxyPoolConfig:
     singbox_path: str = ""
     rotate_every: int = 1
     refresh_interval: int = 3600
+    # 每次注册拉订阅后随机节点，失败再换（有限次）
+    connect_retries: int = 5
+    fetch_sub_each_time: bool = True
 
     def normalized(self) -> "ProxyPoolConfig":
         en = bool(self.enabled)
         port = _clamp_int(self.listen_port, 17890, 1024, 65535)
+        fset = self.fetch_sub_each_time
+        if isinstance(fset, str):
+            fset = fset.strip().lower() not in ("0", "false", "no", "off")
         return ProxyPoolConfig(
             enabled=en,
             sub_url=(self.sub_url or "").strip(),
@@ -151,6 +157,8 @@ class ProxyPoolConfig:
             singbox_path=(self.singbox_path or "").strip(),
             rotate_every=_clamp_int(self.rotate_every, 1, 1, 100),
             refresh_interval=_clamp_int(self.refresh_interval, 3600, 0, 604800),
+            connect_retries=_clamp_int(self.connect_retries, 5, 1, 20),
+            fetch_sub_each_time=bool(fset),
         )
 
     def to_dict(self, mask: bool = True) -> dict:
@@ -366,6 +374,9 @@ class ConfigManager:
         en = raw.get("enabled", False)
         if isinstance(en, str):
             en = en.strip().lower() not in ("0", "false", "no", "off")
+        fset = raw.get("fetch_sub_each_time", True)
+        if isinstance(fset, str):
+            fset = fset.strip().lower() not in ("0", "false", "no", "off")
         return ProxyPoolConfig(
             enabled=bool(en),
             sub_url=str(raw.get("sub_url") or ""),
@@ -373,6 +384,8 @@ class ConfigManager:
             singbox_path=str(raw.get("singbox_path") or ""),
             rotate_every=_clamp_int(raw.get("rotate_every", 1), 1, 1, 100),
             refresh_interval=_clamp_int(raw.get("refresh_interval", 3600), 3600, 0, 604800),
+            connect_retries=_clamp_int(raw.get("connect_retries", 5), 5, 1, 20),
+            fetch_sub_each_time=bool(fset),
         ).normalized()
 
     def get_proxy_pool_settings(self) -> ProxyPoolConfig:
@@ -427,6 +440,9 @@ class ConfigManager:
             sub = data.get("sub_url")
             if sub is None or (keep_secrets_if_masked and isinstance(sub, str) and "***" in sub):
                 sub = prev.sub_url
+            fset = data.get("fetch_sub_each_time", prev.fetch_sub_each_time)
+            if isinstance(fset, str):
+                fset = fset.strip().lower() not in ("0", "false", "no", "off")
             self.config.proxy_pool = ProxyPoolConfig(
                 enabled=bool(en),
                 sub_url=str(sub or "").strip(),
@@ -436,6 +452,10 @@ class ConfigManager:
                 refresh_interval=_clamp_int(
                     data.get("refresh_interval", prev.refresh_interval), prev.refresh_interval, 0, 604800
                 ),
+                connect_retries=_clamp_int(
+                    data.get("connect_retries", prev.connect_retries), prev.connect_retries, 1, 20
+                ),
+                fetch_sub_each_time=bool(fset),
             ).normalized()
             self.save()
             return self.config.proxy_pool

@@ -453,16 +453,23 @@
                         <div class="field"><label>本地入站端口</label>
                             <input type="number" id="px-port" min="1024" max="65535" value="17890">
                         </div>
-                        <div class="field"><label>每 N 次注册轮换节点</label>
-                            <input type="number" id="px-rotate" min="1" max="100" value="1">
+                        <div class="field"><label>连通失败换节点次数</label>
+                            <input type="number" id="px-retries" min="1" max="20" value="5" title="每次注册随机节点，失败则换">
                         </div>
-                        <div class="field"><label>订阅刷新间隔（秒，0=仅手动）</label>
+                        <div class="field"><label>订阅刷新间隔（秒，备用）</label>
                             <input type="number" id="px-refresh" min="0" max="604800" value="3600">
                         </div>
                         <div class="field"><label>sing-box 路径（可选）</label>
                             <input type="text" id="px-bin" placeholder="空则 PATH / 自动下载">
                         </div>
                     </div>
+                    <label class="toggle-row" style="margin:4px 0 12px">
+                        <span class="toggle-label">每次注册重新拉取订阅并随机节点</span>
+                        <label class="switch">
+                            <input type="checkbox" id="px-fetch-each" checked>
+                            <span class="slider"></span>
+                        </label>
+                    </label>
                     <div class="btn-group">
                         <button class="btn-primary" onclick="saveProxyPool()">保存配置</button>
                         <button class="btn-outline" onclick="proxyAction('refresh')">刷新节点</button>
@@ -797,9 +804,10 @@ let cfg = { api_keys: '', mimo_accounts: [] }, parsed = null;
                 if (!$id('px-sub').value) $id('px-sub').placeholder = pp.sub_url;
             }
             if ($id('px-port')) $id('px-port').value = pp.listen_port || 17890;
-            if ($id('px-rotate')) $id('px-rotate').value = pp.rotate_every != null ? pp.rotate_every : 1;
+            if ($id('px-retries')) $id('px-retries').value = pp.connect_retries != null ? pp.connect_retries : 5;
             if ($id('px-refresh')) $id('px-refresh').value = pp.refresh_interval != null ? pp.refresh_interval : 3600;
             if ($id('px-bin')) $id('px-bin').value = pp.singbox_path || '';
+            if ($id('px-fetch-each')) $id('px-fetch-each').checked = pp.fetch_sub_each_time !== false;
         }
 
         function collectProxyBody() {
@@ -807,9 +815,11 @@ let cfg = { api_keys: '', mimo_accounts: [] }, parsed = null;
                 enabled: $id('px-enabled') ? $id('px-enabled').checked : false,
                 sub_url: $id('px-sub') ? $id('px-sub').value.trim() : '',
                 listen_port: parseInt($id('px-port').value, 10) || 17890,
-                rotate_every: parseInt($id('px-rotate').value, 10) || 1,
+                connect_retries: parseInt($id('px-retries') && $id('px-retries').value, 10) || 5,
+                rotate_every: 1,
                 refresh_interval: parseInt($id('px-refresh').value, 10) || 0,
                 singbox_path: $id('px-bin') ? $id('px-bin').value.trim() : '',
+                fetch_sub_each_time: $id('px-fetch-each') ? $id('px-fetch-each').checked : true,
             };
         }
 

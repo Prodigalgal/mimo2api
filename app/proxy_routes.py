@@ -21,6 +21,8 @@ def _apply_settings_from_config() -> None:
             singbox_path=cfg.singbox_path,
             rotate_every=cfg.rotate_every,
             refresh_interval=cfg.refresh_interval,
+            connect_retries=getattr(cfg, "connect_retries", 5),
+            fetch_sub_each_time=getattr(cfg, "fetch_sub_each_time", True),
         )
     )
 
@@ -111,10 +113,26 @@ async def proxy_test(username: str = Depends(verify_admin)):
 
     _apply_settings_from_config()
     try:
-        await proxy_pool.start()
-        url = proxy_pool.proxy_url()
+        # acquire like register: random node + probe retries
+        try:
+            url = await proxy_pool.ensure_for_register()
+        except Exception:
+            await proxy_pool.start()
+            url = proxy_pool.proxy_url()
+            if url and url.startswith("socks5://"):
+                url = url.replace("socks5://", "http://")
         if not url:
             return {"ok": False, "error": "代理未运行", **proxy_pool.status()}
+        if url.startswith("socks5://"):
+            url = url.replace("socks5://", "http://")
+        ok, detail = await proxy_pool.probe_proxy(url)
+        if not ok:
+            return {
+                "ok": False,
+                "error": f"节点探测失败: {detail}",
+                "proxy_url": url,
+                **proxy_pool.status(),
+            }
         async with httpx.AsyncClient(
             timeout=25.0,
             proxy=url,

@@ -17,12 +17,14 @@
     "auto_captcha": true
   },
   "proxy_pool": {
-    "enabled": false,
+    "enabled": true,
     "sub_url": "https://proxy.example.com/sub?token=YOUR_TOKEN",
     "listen_port": 17890,
     "singbox_path": "",
     "rotate_every": 1,
-    "refresh_interval": 3600
+    "refresh_interval": 3600,
+    "connect_retries": 5,
+    "fetch_sub_each_time": true
   },
   "captcha_ai": {
     "enabled": false,

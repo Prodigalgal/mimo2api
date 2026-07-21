@@ -76,10 +76,14 @@ class ProxyPoolSettings:
     listen_port: int = _DEFAULT_LISTEN_PORT
     # path to sing-box binary; empty = auto find / download
     singbox_path: str = ""
-    # rotate outbound every N register attempts (1 = every attempt)
+    # rotate outbound every N register attempts (1 = every attempt) — legacy; per-register always random
     rotate_every: int = 1
     # auto refresh subscription seconds (0 = only on start/manual)
     refresh_interval: int = 3600
+    # each register: refresh sub + random node; on fail switch node up to N times
+    connect_retries: int = 5
+    # always re-fetch subscription before each register acquire
+    fetch_sub_each_time: bool = True
 
     def normalized(self) -> "ProxyPoolSettings":
         port = int(self.listen_port or _DEFAULT_LISTEN_PORT)
@@ -91,6 +95,8 @@ class ProxyPoolSettings:
             singbox_path=(self.singbox_path or "").strip(),
             rotate_every=max(1, min(100, int(self.rotate_every or 1))),
             refresh_interval=max(0, min(86400 * 7, int(self.refresh_interval or 0))),
+            connect_retries=max(1, min(20, int(self.connect_retries or 5))),
+            fetch_sub_each_time=bool(self.fetch_sub_each_time),
         )
 
     def to_dict(self, mask: bool = True) -> dict:
@@ -556,81 +562,180 @@ class SingBoxProxyPool:
             self._status = "stopped"
         return self.status()
 
+    def _pick_random_node(self, exclude: Optional[set] = None) -> VlessNode:
+        exclude = exclude or set()
+        with self._lock:
+            pool = [n for n in self.nodes if n.tag() not in exclude]
+            if not pool:
+                pool = list(self.nodes)
+            if not pool:
+                raise ProxyPoolError("代理池为空")
+            return random.choice(pool)
+
+    async def _wait_local_port(self, timeout: float = 6.0) -> bool:
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            if self._proc and self._proc.poll() is not None:
+                return False
+            try:
+                with socket.create_connection(("127.0.0.1", self._listen_port), timeout=0.25):
+                    return True
+            except OSError:
+                await asyncio.sleep(0.15)
+        return False
+
+    async def _select_node_tag(self, tag: str) -> bool:
+        """Switch selector outbound to tag via Clash API; fallback restart."""
+        with self._lock:
+            self._selected_tag = tag
+            name = next((n.name for n in self.nodes if n.tag() == tag), tag)
+        api_port = self._listen_port + 1
+        switched = False
+        try:
+            async with httpx.AsyncClient(timeout=4.0) as client:
+                # Clash API: PUT /proxies/{selector_group} body {"name": outbound_tag}
+                for group in ("select", "SELECT", "GLOBAL"):
+                    try:
+                        r = await client.put(
+                            f"http://127.0.0.1:{api_port}/proxies/{group}",
+                            json={"name": tag},
+                        )
+                        if r.status_code < 400:
+                            switched = True
+                            break
+                    except Exception:
+                        continue
+        except Exception:
+            switched = False
+
+        if not switched:
+            self._write_config(tag)
+            self._stop_proc()
+            binary = self._binary or await ensure_singbox(self.settings.singbox_path)
+            self._binary = binary
+            self._proc = subprocess.Popen(
+                [binary, "run", "-c", str(self._config_path)],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                cwd=str(_config_dir()),
+            )
+            ok = await self._wait_local_port(8.0)
+            self._status = "running" if ok else "error"
+            if not ok:
+                self._last_error = "切换节点后 sing-box 未就绪"
+                return False
+        print(f"[ProxyPool] selected {name} ({tag})")
+        return True
+
     async def rotate(self) -> dict:
-        """Pick another node and reload sing-box."""
+        """Pick another random node and switch."""
         with self._lock:
             if not self.nodes:
                 raise ProxyPoolError("无节点可轮换")
             cur = self._selected_tag
-            choices = [n for n in self.nodes if n.tag() != cur] or list(self.nodes)
-            node = random.choice(choices)
-            self._selected_tag = node.tag()
-            name = node.name
-        # try clash api switch first
-        api_port = self._listen_port + 1
-        switched = False
+        node = self._pick_random_node(exclude={cur} if cur else set())
+        ok = await self._select_node_tag(node.tag())
+        if not ok:
+            raise ProxyPoolError(self._last_error or "切换节点失败")
+        return {**self.status(), "rotated_to": node.name}
+
+    async def probe_proxy(self, proxy_url: Optional[str] = None, timeout: float = 12.0) -> Tuple[bool, str]:
+        """Probe egress via local mixed proxy. Returns (ok, detail)."""
+        url = proxy_url or self.proxy_url()
+        if not url:
+            return False, "proxy not running"
+        # prefer http:// for mixed inbound (more reliable than socks without socksio)
+        http_url = url.replace("socks5://", "http://").replace("socks5h://", "http://")
         try:
-            async with httpx.AsyncClient(timeout=3.0) as client:
-                r = await client.put(
-                    f"http://127.0.0.1:{api_port}/proxies/select",
-                    json={"name": self._selected_tag},
-                )
-                # clash API path variants
-                if r.status_code >= 400:
-                    r = await client.put(
-                        f"http://127.0.0.1:{api_port}/proxies/select",
-                        content=json.dumps({"name": self._selected_tag}),
+            async with httpx.AsyncClient(
+                timeout=timeout,
+                proxy=http_url,
+                follow_redirects=True,
+            ) as client:
+                # Xiaomi account + generic IP
+                try:
+                    r = await client.get(
+                        "https://account.xiaomi.com/pass/serviceLogin",
+                        headers={"User-Agent": "Mozilla/5.0"},
                     )
-                if r.status_code < 400:
-                    switched = True
-        except Exception:
-            switched = False
-        if not switched:
-            # restart with new default
-            if self._status == "running":
-                self._write_config(self._selected_tag)
-                self._stop_proc()
-                self._proc = subprocess.Popen(
-                    [self._binary or await ensure_singbox(self.settings.singbox_path), "run", "-c", str(self._config_path)],
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                    cwd=str(_config_dir()),
-                )
-                for _ in range(30):
-                    try:
-                        with socket.create_connection(("127.0.0.1", self._listen_port), timeout=0.3):
-                            self._status = "running"
-                            break
-                    except OSError:
-                        await asyncio.sleep(0.2)
-        print(f"[ProxyPool] rotated to {name} ({self._selected_tag})")
-        return {**self.status(), "rotated_to": name}
+                    if r.status_code < 500:
+                        return True, f"xiaomi HTTP {r.status_code}"
+                except Exception as e1:
+                    pass
+                r2 = await client.get("https://api.ipify.org?format=json")
+                if r2.status_code < 400:
+                    return True, r2.text[:120]
+                return False, f"ipify HTTP {r2.status_code}"
+        except TypeError:
+            try:
+                async with httpx.AsyncClient(
+                    timeout=timeout,
+                    proxies=http_url,
+                    follow_redirects=True,
+                ) as client:
+                    r2 = await client.get("https://api.ipify.org?format=json")
+                    if r2.status_code < 400:
+                        return True, r2.text[:120]
+                    return False, f"ipify HTTP {r2.status_code}"
+            except Exception as e:
+                return False, str(e)[:200]
+        except Exception as e:
+            return False, str(e)[:200]
 
     async def ensure_for_register(self) -> Optional[str]:
-        """Return proxy URL if pool enabled; start/refresh as needed."""
+        """Per register: fetch sub (optional), random node, probe, retry other nodes.
+
+        Returns socks/http proxy URL when ready, else raises ProxyPoolError.
+        """
         s = self.settings.normalized()
         if not s.enabled or not s.sub_url:
             return None
-        # refresh sub if stale
-        if not self.nodes or (
-            s.refresh_interval > 0 and time.time() - self._last_fetch > s.refresh_interval
-        ):
+
+        # every register: re-fetch subscription when configured
+        if s.fetch_sub_each_time or not self.nodes:
             try:
                 await self.refresh_nodes()
             except Exception as e:
                 print(f"[ProxyPool] refresh fail: {e}")
                 if not self.nodes:
-                    raise
+                    raise ProxyPoolError(f"拉取代理订阅失败: {e}")
+        elif s.refresh_interval > 0 and time.time() - self._last_fetch > s.refresh_interval:
+            try:
+                await self.refresh_nodes()
+            except Exception as e:
+                print(f"[ProxyPool] stale refresh fail: {e}")
+
         if self._status != "running" or not self._proc or self._proc.poll() is not None:
             await self.start()
-        # rotate policy
-        self._attempt += 1
-        if self._attempt > 1 and (self._attempt - 1) % s.rotate_every == 0:
-            try:
-                await self.rotate()
-            except Exception as e:
-                print(f"[ProxyPool] rotate fail: {e}")
-        return self.proxy_url()
+
+        tried: set = set()
+        last_err = ""
+        max_try = min(s.connect_retries, max(1, len(self.nodes)))
+        for i in range(max_try):
+            node = self._pick_random_node(exclude=tried)
+            tried.add(node.tag())
+            ok_sel = await self._select_node_tag(node.tag())
+            if not ok_sel:
+                last_err = self._last_error or "select failed"
+                print(f"[ProxyPool] select fail {node.name}: {last_err}")
+                continue
+            # give selector a moment
+            await asyncio.sleep(0.3)
+            proxy = self.proxy_url()
+            # use http mixed URL for probe/client reliability
+            http_proxy = f"http://127.0.0.1:{self._listen_port}"
+            ok, detail = await self.probe_proxy(http_proxy)
+            if ok:
+                print(f"[ProxyPool] register acquire ok node={node.name} detail={detail}")
+                self._attempt += 1
+                # prefer http:// for httpx (mixed inbound)
+                return http_proxy
+            last_err = detail
+            print(f"[ProxyPool] node unreachable {node.name}: {detail}, try another ({i+1}/{max_try})")
+
+        raise ProxyPoolError(
+            f"代理节点均不可用（已试 {len(tried)} 个）: {last_err}"
+        )
 
 
 # global singleton

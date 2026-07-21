@@ -247,7 +247,7 @@ def _client(
 
 
 async def _resolve_register_proxy(on_progress: ProgressCb = None) -> Optional[str]:
-    """If proxy pool enabled, ensure sing-box and return socks URL."""
+    """If proxy pool enabled: pull sub, random node, probe, limited failover retries."""
     try:
         from .config import config_manager
         from .proxy_pool import proxy_pool, ProxyPoolSettings, ProxyPoolError
@@ -263,22 +263,29 @@ async def _resolve_register_proxy(on_progress: ProgressCb = None) -> Optional[st
                 singbox_path=cfg.singbox_path,
                 rotate_every=cfg.rotate_every,
                 refresh_interval=cfg.refresh_interval,
+                connect_retries=getattr(cfg, "connect_retries", 5),
+                fetch_sub_each_time=getattr(cfg, "fetch_sub_each_time", True),
             )
         )
-        _emit(on_progress, "proxy", "正在准备代理池 (sing-box)…")
+        _emit(
+            on_progress,
+            "proxy",
+            f"每次注册拉取代理订阅并随机节点（失败最多换 {getattr(cfg, 'connect_retries', 5)} 次）…",
+        )
         url = await proxy_pool.ensure_for_register()
         if url:
             st = proxy_pool.status()
             _emit(
                 on_progress,
                 "proxy",
-                f"代理就绪 {url} · 节点 {st.get('selected') or st.get('node_count')}",
+                f"代理就绪 {url} · 当前节点 {st.get('selected') or '-'} · 池内 {st.get('node_count') or 0} 个",
             )
         return url
     except Exception as e:
-        _emit(on_progress, "proxy", f"代理不可用，直连: {e}")
+        # proxy enabled but all nodes failed — do NOT silently direct (would burn IP)
+        _emit(on_progress, "proxy", f"代理获取失败: {e}")
         print(f"[Register] proxy pool unavailable: {e}")
-        return None
+        raise
 
 
 def _dump_cookies(client: httpx.AsyncClient) -> List[dict]:
@@ -456,7 +463,10 @@ async def start_register(
     _emit(on_progress, "encrypt", "凭证已加密", addr.address)
 
     device_id = _new_device_id()
-    proxy_url = await _resolve_register_proxy(on_progress)
+    try:
+        proxy_url = await _resolve_register_proxy(on_progress)
+    except Exception as e:
+        raise XiaomiRegisterError(f"代理池不可用: {e}") from e
     client = _client(device_id, proxy=proxy_url)
     try:
         _emit(on_progress, "captcha", "正在获取图片验证码…", addr.address)
