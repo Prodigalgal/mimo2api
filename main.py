@@ -10,13 +10,15 @@ from pathlib import Path
 from app.routes import router, _do_discover
 from app.config import config_manager
 from app.anthropic_routes import router as anthropic_router
+from app.register_routes import router as register_router
+from app.proxy_routes import router as proxy_router
 from app.batch import init_batch_storage as init_anthropic_batches
 
 # 创建FastAPI应用
 app = FastAPI(
     title="Mimo2API",
-    description="将小米 Mimo AI 转换为 OpenAI + Anthropic 兼容 API（Chat / Responses / Anthropic Messages）",
-    version="2.4.0"
+    description="小米 MiMo OpenAI/Anthropic 兼容 API · 临时邮箱自动注册 · 代理池 · 多账号保活",
+    version="2.5.0"
 )
 
 # 添加CORS中间件
@@ -165,6 +167,8 @@ def _auto_renew_loop():
 
 # 注册路由
 app.include_router(router)
+app.include_router(register_router)
+app.include_router(proxy_router)
 app.include_router(anthropic_router)
 
 # 初始化 Anthropic batch 存储

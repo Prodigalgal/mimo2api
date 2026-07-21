@@ -43,7 +43,8 @@
 | TTS / ASR | OpenAI 兼容语音接口 |
 | **临时邮箱** | 对接 [cloudflare_temp_email](https://github.com/dreamhunter2333/cloudflare_temp_email) |
 | **自动注册** | 随机地区（非中国）、随机密码、OCR 过图、自动收信验证 |
-| **批量注册** | 成功目标数即停、并发与间隔；**后台任务 + 轮询**（避免网关 504） |
+| **批量注册** | 成功目标数即停、并发与间隔；**后台任务 + 详细阶段日志**（内存） |
+| **代理池** | VLESS 订阅 + 本机 **sing-box** 混合入站，注册流量走 SOCKS5 |
 | **保活** | passToken 续期；失效时用 temp-mail 自动取 mail code 重登 |
 | 多账号 | 管理面板导入 / 轮询负载 |
 
@@ -118,7 +119,8 @@ docker run -d -p 8080:8080 -v $(pwd)/config.json:/app/config.json <image>
 | cURL / Cookie / 邮箱 | 导入已有 MiMo 会话 |
 | **自动注册** | 注册参数、单次 / 批量注册、OCR |
 | **临时邮箱** | 仅邮箱 API（地址、管理口令、域名） |
-| 账号 | 列表、测试、续期、删除 |
+| **代理池** | VLESS 订阅、sing-box 启停/轮换/连通测试 |
+| 账号 | 列表（分页）、测试、续期、删除 |
 | API Key | 对外调用密钥、管理密码 |
 | 用量统计 | 请求量与 token 统计 |
 
@@ -271,20 +273,32 @@ curl http://localhost:8080/v1/chat/completions \
 
 ---
 
+## 代理池（VLESS + sing-box）
+
+1. 管理面板 **代理池** 页填写订阅 URL（base64 多行 `vless://`）  
+2. 启用代理 → 保存 → 启动（自动下载/查找 `sing-box` 到 `.bin/`）  
+3. 本地 `127.0.0.1:listen_port` 混合入站；注册请求走 `socks5://127.0.0.1:port`  
+4. 可按「每 N 次注册」轮换节点  
+
+依赖：系统可运行 sing-box；Python 侧需 `socksio`（见 requirements）。
+
 ## 项目结构
 
 ```
 MiMo2API/
-├── main.py                 # 入口、续期循环
+├── main.py                   # 入口，挂载各 router
 ├── app/
-│   ├── routes.py           # OpenAI / 管理 / 注册 API
-│   ├── xiaomi_login.py     # 密码登录、OTP、passToken 换票
-│   ├── xiaomi_register.py  # 注册 + OCR
-│   ├── temp_mail.py        # Cloudflare 临时邮箱客户端
-│   ├── mimo_client.py      # 上游聊天代理
-│   ├── config.py           # 配置与账号
-│   └── ...
-├── web/index.html          # 中文管理面板
+│   ├── routes.py             # OpenAI / 管理 / 导入
+│   ├── register_routes.py    # 临时邮箱 / 自动注册 / 批量 / 续期
+│   ├── proxy_routes.py       # 代理池 API
+│   ├── proxy_pool.py         # VLESS 订阅解析 + sing-box 进程
+│   ├── account_service.py    # 账号落库共用逻辑
+│   ├── xiaomi_login.py       # 密码登录、OTP、passToken
+│   ├── xiaomi_register.py    # 注册 + OCR（可走代理）
+│   ├── temp_mail.py          # 临时邮箱客户端
+│   ├── mimo_client.py        # 上游聊天代理
+│   └── config.py             # 配置
+├── web/index.html
 ├── config.example.json
 └── requirements.txt
 ```

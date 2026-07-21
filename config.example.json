@@ -16,11 +16,13 @@
     "otp_timeout": 120,
     "auto_captcha": true
   },
-  "mimo_accounts": [
-    {
-      "service_token": "YOUR_SERVICE_TOKEN",
-      "user_id": "YOUR_USER_ID",
-      "xiaomichatbot_ph": "YOUR_XIAOMICHATBOT_PH"
-    }
-  ]
+  "proxy_pool": {
+    "enabled": false,
+    "sub_url": "https://proxy.example.com/sub?token=YOUR_TOKEN",
+    "listen_port": 17890,
+    "singbox_path": "",
+    "rotate_every": 1,
+    "refresh_interval": 3600
+  },
+  "mimo_accounts": []
 }

@@ -132,6 +132,42 @@ class MimoAccount:
 
 
 @dataclass
+class ProxyPoolConfig:
+    """VLESS 订阅 + sing-box 本地代理（注册/续期可走代理）"""
+    enabled: bool = False
+    sub_url: str = ""
+    listen_port: int = 17890
+    singbox_path: str = ""
+    rotate_every: int = 1
+    refresh_interval: int = 3600
+
+    def normalized(self) -> "ProxyPoolConfig":
+        en = bool(self.enabled)
+        port = _clamp_int(self.listen_port, 17890, 1024, 65535)
+        return ProxyPoolConfig(
+            enabled=en,
+            sub_url=(self.sub_url or "").strip(),
+            listen_port=port,
+            singbox_path=(self.singbox_path or "").strip(),
+            rotate_every=_clamp_int(self.rotate_every, 1, 1, 100),
+            refresh_interval=_clamp_int(self.refresh_interval, 3600, 0, 604800),
+        )
+
+    def to_dict(self, mask: bool = True) -> dict:
+        n = self.normalized()
+        d = asdict(n)
+        if mask and n.sub_url and "token=" in n.sub_url:
+            import re as _re
+            d["sub_url"] = _re.sub(
+                r"(token=)([^&]+)",
+                lambda m: m.group(1) + (m.group(2)[:4] + "***" + m.group(2)[-4:] if len(m.group(2)) > 8 else "***"),
+                n.sub_url,
+            )
+        d["configured"] = bool(n.sub_url)
+        return d
+
+
+@dataclass
 class Config:
     """应用配置"""
     api_keys: str = "sk-default"
@@ -140,6 +176,7 @@ class Config:
     models: List[str] = None  # 自定义模型列表，None 表示自动探测
     tools_passthrough: bool = False  # 全局工具透传模式
     temp_mail: TempMailSettings = None
+    proxy_pool: ProxyPoolConfig = None
 
     def __post_init__(self):
         if self.mimo_accounts is None:
@@ -148,6 +185,8 @@ class Config:
             self.models = []
         if self.temp_mail is None:
             self.temp_mail = TempMailSettings()
+        if self.proxy_pool is None:
+            self.proxy_pool = ProxyPoolConfig()
 
     def to_dict(self):
         d = {
@@ -156,6 +195,7 @@ class Config:
             "mimo_accounts": [acc.to_dict() for acc in self.mimo_accounts],
             "tools_passthrough": self.tools_passthrough,
             "temp_mail": self.temp_mail.to_dict(mask=True) if self.temp_mail else TempMailSettings().to_dict(),
+            "proxy_pool": self.proxy_pool.to_dict(mask=True) if self.proxy_pool else ProxyPoolConfig().to_dict(),
         }
         if self.models:
             d["models"] = self.models
@@ -168,6 +208,7 @@ class Config:
             "has_password", "has_pass_token", "has_mail_jwt",
         }
         tm = self.temp_mail or TempMailSettings()
+        pp = self.proxy_pool or ProxyPoolConfig()
         d = {
             "api_keys": self.api_keys,
             "admin_password": self.admin_password,
@@ -181,6 +222,7 @@ class Config:
             ],
             "tools_passthrough": self.tools_passthrough,
             "temp_mail": asdict(tm.normalized()),
+            "proxy_pool": asdict(pp.normalized()),
         }
         if self.models:
             d["models"] = self.models
@@ -246,6 +288,7 @@ class ConfigManager:
                     models=data.get('models', []),
                     tools_passthrough=data.get('tools_passthrough', False),
                     temp_mail=self._parse_temp_mail(data),
+                    proxy_pool=self._parse_proxy_pool(data),
                 )
         except Exception as e:
             print(f"加载配置失败: {e}")
@@ -279,6 +322,49 @@ class ConfigManager:
     def get_temp_mail_settings(self) -> TempMailSettings:
         with self.lock:
             return self.config.temp_mail or TempMailSettings()
+
+    @staticmethod
+    def _parse_proxy_pool(data: dict) -> ProxyPoolConfig:
+        raw = data.get("proxy_pool") or {}
+        if not isinstance(raw, dict):
+            raw = {}
+        en = raw.get("enabled", False)
+        if isinstance(en, str):
+            en = en.strip().lower() not in ("0", "false", "no", "off")
+        return ProxyPoolConfig(
+            enabled=bool(en),
+            sub_url=str(raw.get("sub_url") or ""),
+            listen_port=_clamp_int(raw.get("listen_port", 17890), 17890, 1024, 65535),
+            singbox_path=str(raw.get("singbox_path") or ""),
+            rotate_every=_clamp_int(raw.get("rotate_every", 1), 1, 1, 100),
+            refresh_interval=_clamp_int(raw.get("refresh_interval", 3600), 3600, 0, 604800),
+        ).normalized()
+
+    def get_proxy_pool_settings(self) -> ProxyPoolConfig:
+        with self.lock:
+            return (self.config.proxy_pool or ProxyPoolConfig()).normalized()
+
+    def update_proxy_pool(self, data: dict, *, keep_secrets_if_masked: bool = True) -> ProxyPoolConfig:
+        with self.lock:
+            prev = (self.config.proxy_pool or ProxyPoolConfig()).normalized()
+            en = data.get("enabled", prev.enabled)
+            if isinstance(en, str):
+                en = en.strip().lower() not in ("0", "false", "no", "off")
+            sub = data.get("sub_url")
+            if sub is None or (keep_secrets_if_masked and isinstance(sub, str) and "***" in sub):
+                sub = prev.sub_url
+            self.config.proxy_pool = ProxyPoolConfig(
+                enabled=bool(en),
+                sub_url=str(sub or "").strip(),
+                listen_port=_clamp_int(data.get("listen_port", prev.listen_port), prev.listen_port, 1024, 65535),
+                singbox_path=str(data.get("singbox_path", prev.singbox_path) or "").strip(),
+                rotate_every=_clamp_int(data.get("rotate_every", prev.rotate_every), prev.rotate_every, 1, 100),
+                refresh_interval=_clamp_int(
+                    data.get("refresh_interval", prev.refresh_interval), prev.refresh_interval, 0, 604800
+                ),
+            ).normalized()
+            self.save()
+            return self.config.proxy_pool
 
     def update_temp_mail(self, data: dict, *, keep_secrets_if_masked: bool = True) -> TempMailSettings:
         """Update temp mail + register settings. Password fields with '***' keep previous."""
@@ -362,6 +448,22 @@ class ConfigManager:
                 temp_mail = self._parse_temp_mail({"temp_mail": payload})
             else:
                 temp_mail = prev_tm
+            prev_pp = self.config.proxy_pool or ProxyPoolConfig()
+            pp_raw = new_config.get("proxy_pool")
+            if isinstance(pp_raw, dict):
+                payload = dict(pp_raw)
+                if (
+                    payload.get("sub_url") is None
+                    or (isinstance(payload.get("sub_url"), str) and "***" in payload.get("sub_url", ""))
+                ):
+                    payload["sub_url"] = prev_pp.sub_url
+                for k in ProxyPoolConfig.__dataclass_fields__:
+                    if k not in payload or payload[k] is None:
+                        payload[k] = getattr(prev_pp, k)
+                proxy_pool = self._parse_proxy_pool({"proxy_pool": payload})
+            else:
+                proxy_pool = prev_pp
+
             self.config = Config(
                 api_keys=new_config.get('api_keys', 'sk-default'),
                 admin_password=new_config.get('admin_password', 'admin'),
@@ -369,6 +471,7 @@ class ConfigManager:
                 models=new_config.get('models', []),
                 tools_passthrough=new_config.get('tools_passthrough', False),
                 temp_mail=temp_mail,
+                proxy_pool=proxy_pool,
             )
             self.save()
 

@@ -203,16 +203,30 @@ def encrypt_aes(fields: Dict[str, str]) -> Dict[str, Any]:
     return {"EUI": eui, "encryptedParams": encrypted_params}
 
 
-def _client(device_id: str, cookies: Optional[List[dict]] = None) -> httpx.AsyncClient:
-    c = httpx.AsyncClient(
-        follow_redirects=False,
-        timeout=30.0,
-        headers={
+def _client(
+    device_id: str,
+    cookies: Optional[List[dict]] = None,
+    *,
+    proxy: Optional[str] = None,
+) -> httpx.AsyncClient:
+    """Create Xiaomi account HTTP client; optional socks5/http proxy from sing-box pool."""
+    kwargs: Dict[str, Any] = {
+        "follow_redirects": False,
+        "timeout": 45.0,
+        "headers": {
             "User-Agent": UA,
             "Accept-Language": "en-US,en;q=0.9",
             "Accept": "application/json, text/plain, */*",
         },
-    )
+    }
+    if proxy:
+        # httpx>=0.28 uses `proxy=`; 0.27 uses `proxies=`
+        try:
+            c = httpx.AsyncClient(proxy=proxy, **kwargs)
+        except TypeError:
+            c = httpx.AsyncClient(proxies=proxy, **kwargs)
+    else:
+        c = httpx.AsyncClient(**kwargs)
     for domain in ("xiaomi.com", "account.xiaomi.com", "mi.com"):
         c.cookies.set("sdkVersion", "accountsdk-18.8.15", domain=domain)
         c.cookies.set("deviceId", device_id, domain=domain)
@@ -230,6 +244,41 @@ def _client(device_id: str, cookies: Optional[List[dict]] = None) -> httpx.Async
             except Exception:
                 pass
     return c
+
+
+async def _resolve_register_proxy(on_progress: ProgressCb = None) -> Optional[str]:
+    """If proxy pool enabled, ensure sing-box and return socks URL."""
+    try:
+        from .config import config_manager
+        from .proxy_pool import proxy_pool, ProxyPoolSettings, ProxyPoolError
+
+        cfg = config_manager.get_proxy_pool_settings()
+        if not cfg.enabled or not cfg.sub_url:
+            return None
+        proxy_pool.configure(
+            ProxyPoolSettings(
+                enabled=cfg.enabled,
+                sub_url=cfg.sub_url,
+                listen_port=cfg.listen_port,
+                singbox_path=cfg.singbox_path,
+                rotate_every=cfg.rotate_every,
+                refresh_interval=cfg.refresh_interval,
+            )
+        )
+        _emit(on_progress, "proxy", "正在准备代理池 (sing-box)…")
+        url = await proxy_pool.ensure_for_register()
+        if url:
+            st = proxy_pool.status()
+            _emit(
+                on_progress,
+                "proxy",
+                f"代理就绪 {url} · 节点 {st.get('selected') or st.get('node_count')}",
+            )
+        return url
+    except Exception as e:
+        _emit(on_progress, "proxy", f"代理不可用，直连: {e}")
+        print(f"[Register] proxy pool unavailable: {e}")
+        return None
 
 
 def _dump_cookies(client: httpx.AsyncClient) -> List[dict]:
@@ -368,7 +417,8 @@ async def start_register(
     _emit(on_progress, "encrypt", "凭证已加密", addr.address)
 
     device_id = _new_device_id()
-    client = _client(device_id)
+    proxy_url = await _resolve_register_proxy(on_progress)
+    client = _client(device_id, proxy=proxy_url)
     try:
         _emit(on_progress, "captcha", "正在获取图片验证码…", addr.address)
         img_bytes, captcha_b64 = await fetch_captcha(client)

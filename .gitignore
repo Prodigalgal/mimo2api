@@ -9,3 +9,6 @@ local-debug/
 *.har
 login*.png
 .xiaomi_login_*
+.bin/
+.singbox/
+*.log

@@ -248,6 +248,7 @@
                 <div class="tab" onclick="switchTab('email')">邮箱</div>
                 <div class="tab" onclick="switchTab('register')">自动注册</div>
                 <div class="tab" onclick="switchTab('tempmail')">临时邮箱</div>
+                <div class="tab" onclick="switchTab('proxy')">代理池</div>
                 <div class="tab" onclick="switchTab('accounts')">账号</div>
                 <div class="tab" onclick="switchTab('apikey')">API Key</div>
                 <div class="tab" onclick="switchTab('usage')">用量统计</div>
@@ -404,6 +405,47 @@
                         <button class="btn-primary" onclick="saveTempMail()">保存邮箱配置</button>
                     </div>
                     <div id="tmResult"></div>
+                </div>
+
+                <!-- VLESS 代理池 (sing-box) -->
+                <div id="panel-proxy" class="tab-panel">
+                    <div class="status info">订阅拉取 VLESS 节点，本机启动 <b>sing-box</b> 混合入站（HTTP/SOCKS），自动注册走代理出口。<br>
+                        未安装 sing-box 时会尝试下载到项目 <code>.bin/</code>。也可手动指定可执行文件路径。</div>
+                    <label class="toggle-row" style="margin:8px 0 12px">
+                        <span class="toggle-label">启用代理池（注册时走代理）</span>
+                        <label class="switch">
+                            <input type="checkbox" id="px-enabled">
+                            <span class="slider"></span>
+                        </label>
+                    </label>
+                    <div class="field"><label>订阅 URL（base64 VLESS）</label>
+                        <input type="text" id="px-sub" placeholder="https://proxy.example.com/sub?token=...">
+                    </div>
+                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+                        <div class="field"><label>本地入站端口</label>
+                            <input type="number" id="px-port" min="1024" max="65535" value="17890">
+                        </div>
+                        <div class="field"><label>每 N 次注册轮换节点</label>
+                            <input type="number" id="px-rotate" min="1" max="100" value="1">
+                        </div>
+                        <div class="field"><label>订阅刷新间隔（秒，0=仅手动）</label>
+                            <input type="number" id="px-refresh" min="0" max="604800" value="3600">
+                        </div>
+                        <div class="field"><label>sing-box 路径（可选）</label>
+                            <input type="text" id="px-bin" placeholder="空则 PATH / 自动下载">
+                        </div>
+                    </div>
+                    <div class="btn-group">
+                        <button class="btn-primary" onclick="saveProxyPool()">保存配置</button>
+                        <button class="btn-outline" onclick="proxyAction('refresh')">刷新节点</button>
+                        <button class="btn-success" onclick="proxyAction('start')">启动</button>
+                        <button class="btn-outline" onclick="proxyAction('rotate')">轮换节点</button>
+                        <button class="btn-outline" onclick="proxyAction('test')">连通测试</button>
+                        <button class="btn-danger" onclick="proxyAction('stop')">停止</button>
+                        <button class="btn-outline" onclick="loadProxyPool()">刷新状态</button>
+                    </div>
+                    <div id="pxResult"></div>
+                    <div id="pxStatus" style="margin-top:10px;font-size:12px;color:var(--text-muted)"></div>
                 </div>
 
                 <!-- 账号管理 -->
@@ -700,7 +742,7 @@ let cfg = { api_keys: '', mimo_accounts: [] }, parsed = null;
         }
 
         function switchTab(t) {
-            const keys = ['curl','cookie','email','register','tempmail','accounts','apikey','usage'];
+            const keys = ['curl','cookie','email','register','tempmail','proxy','accounts','apikey','usage'];
             document.querySelectorAll('.tab').forEach((el, i) => {
                 el.className = 'tab' + (keys[i] === t ? ' active' : '');
             });
@@ -709,9 +751,117 @@ let cfg = { api_keys: '', mimo_accounts: [] }, parsed = null;
             if (t === 'accounts') loadAccounts();
             if (t === 'usage') loadUsage();
             if (t === 'tempmail') loadTempMail();
+            if (t === 'proxy') loadProxyPool();
             if (t === 'register') {
                 loadTempMail();
                 resumeBatchJobIfAny();
+            }
+        }
+
+        // === 代理池 ===
+        function applyProxyForm(pp) {
+            if (!pp) return;
+            if ($id('px-enabled')) $id('px-enabled').checked = !!pp.enabled;
+            if ($id('px-sub') && pp.sub_url && String(pp.sub_url).indexOf('***') === -1) {
+                $id('px-sub').value = pp.sub_url;
+            } else if ($id('px-sub') && pp.sub_url) {
+                // masked: keep existing input if user already typed
+                if (!$id('px-sub').value) $id('px-sub').placeholder = pp.sub_url;
+            }
+            if ($id('px-port')) $id('px-port').value = pp.listen_port || 17890;
+            if ($id('px-rotate')) $id('px-rotate').value = pp.rotate_every != null ? pp.rotate_every : 1;
+            if ($id('px-refresh')) $id('px-refresh').value = pp.refresh_interval != null ? pp.refresh_interval : 3600;
+            if ($id('px-bin')) $id('px-bin').value = pp.singbox_path || '';
+        }
+
+        function collectProxyBody() {
+            return {
+                enabled: $id('px-enabled') ? $id('px-enabled').checked : false,
+                sub_url: $id('px-sub') ? $id('px-sub').value.trim() : '',
+                listen_port: parseInt($id('px-port').value, 10) || 17890,
+                rotate_every: parseInt($id('px-rotate').value, 10) || 1,
+                refresh_interval: parseInt($id('px-refresh').value, 10) || 0,
+                singbox_path: $id('px-bin') ? $id('px-bin').value.trim() : '',
+            };
+        }
+
+        function renderProxyStatus(st) {
+            const el = $id('pxStatus');
+            if (!el) return;
+            const nodes = (st.nodes || []).slice(0, 12).map(function (n) {
+                return '· ' + (n.name || n.tag) + ' <code>' + n.server + ':' + n.port + '</code>';
+            }).join('<br>');
+            el.innerHTML =
+                '<div><b>状态:</b> ' + (st.status || '-') +
+                ' · <b>节点:</b> ' + (st.node_count || 0) +
+                ' · <b>当前:</b> ' + (st.selected || '-') +
+                ' · <b>代理:</b> <code>' + (st.proxy_url || '未运行') + '</code></div>' +
+                (st.binary ? '<div style="margin-top:4px"><b>sing-box:</b> <code>' + st.binary + '</code></div>' : '') +
+                (st.last_error ? '<div style="color:#f87171;margin-top:4px">' + st.last_error + '</div>' : '') +
+                (nodes ? '<div style="margin-top:8px">' + nodes + '</div>' : '');
+        }
+
+        async function loadProxyPool() {
+            try {
+                const j = await apiFetch('/api/proxy-pool/config');
+                if (j.proxy_pool) applyProxyForm(j.proxy_pool);
+                if (j.runtime) renderProxyStatus(j.runtime);
+                else renderProxyStatus(j);
+            } catch (e) {
+                showStatus('pxResult', 'err', e.message || String(e));
+            }
+        }
+
+        async function saveProxyPool() {
+            try {
+                const j = await apiFetch('/api/proxy-pool/config', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(collectProxyBody()),
+                });
+                if (j.ok) {
+                    showStatus('pxResult', 'ok', j.message || '已保存');
+                    toast('代理池配置已保存');
+                    if (j.proxy_pool) applyProxyForm(j.proxy_pool);
+                    if (j.runtime) renderProxyStatus(j.runtime);
+                } else {
+                    showStatus('pxResult', 'err', j.error || '保存失败');
+                }
+            } catch (e) {
+                showStatus('pxResult', 'err', e.message || String(e));
+            }
+        }
+
+        async function proxyAction(act) {
+            const map = {
+                start: '/api/proxy-pool/start',
+                stop: '/api/proxy-pool/stop',
+                refresh: '/api/proxy-pool/refresh',
+                rotate: '/api/proxy-pool/rotate',
+                test: '/api/proxy-pool/test',
+            };
+            const url = map[act];
+            if (!url) return;
+            showStatus('pxResult', 'info', act + ' 执行中…');
+            try {
+                // save config first so start uses latest form values
+                if (act === 'start' || act === 'refresh' || act === 'test') {
+                    await apiFetch('/api/proxy-pool/config', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(collectProxyBody()),
+                    });
+                }
+                const j = await apiFetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+                if (j.ok) {
+                    showStatus('pxResult', 'ok', j.message || (act + ' 成功') + (j.egress ? '<br>出口: ' + j.egress : '') + (j.rotated_to ? '<br>节点: ' + j.rotated_to : ''));
+                    toast(j.message || 'OK');
+                } else {
+                    showStatus('pxResult', 'err', j.error || (act + ' 失败'));
+                }
+                renderProxyStatus(j);
+            } catch (e) {
+                showStatus('pxResult', 'err', e.message || String(e));
             }
         }
 
@@ -722,6 +872,7 @@ let cfg = { api_keys: '', mimo_accounts: [] }, parsed = null;
                 cfg = await r.json();
                 $id('apiKeys').value = cfg.api_keys || '';
                 $id('passthroughToggle').checked = !!cfg.tools_passthrough;
+                if (cfg.proxy_pool) applyProxyForm(cfg.proxy_pool);
                 $id('adminPassword').value = cfg.admin_password || '';
                 if (cfg.temp_mail) {
                     applyTempMailForm(cfg.temp_mail);
