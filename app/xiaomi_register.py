@@ -346,7 +346,7 @@ def solve_captcha_image(image_bytes: bytes) -> str:
 
 
 def solve_captcha_candidates(image_bytes: bytes) -> List[str]:
-    """OCR + case variants (Xiaomi icode often case-insensitive)."""
+    """ddddocr + case variants (Xiaomi icode often case-insensitive)."""
     primary = solve_captcha_image(image_bytes)
     if not primary:
         return []
@@ -354,6 +354,45 @@ def solve_captcha_candidates(image_bytes: bytes) -> List[str]:
     for t in (primary, primary.lower(), primary.upper()):
         if t and t not in out:
             out.append(t)
+    return out
+
+
+async def solve_captcha_candidates_async(
+    image_bytes: bytes,
+    *,
+    on_progress: ProgressCb = None,
+    email: Optional[str] = None,
+) -> List[str]:
+    """ddddocr first, then AI vision fallback when configured."""
+    out = solve_captcha_candidates(image_bytes)
+    if out:
+        return out
+    # AI fallback
+    try:
+        from .config import config_manager
+        from .captcha_ai import CaptchaAIConfig, ai_captcha_candidates
+
+        ca = config_manager.config.captcha_ai
+        if ca is None:
+            return out
+        cfg = CaptchaAIConfig(
+            enabled=ca.enabled,
+            api_base=ca.api_base,
+            api_key=ca.api_key,
+            model=ca.model,
+            timeout=ca.timeout,
+        )
+        if not cfg.normalized().is_ready():
+            return out
+        _emit(on_progress, "ocr_ai", "ddddocr 无结果，尝试 AI 识图…", email)
+        ai_list = await ai_captcha_candidates(image_bytes, cfg)
+        for c in ai_list:
+            if c and c not in out:
+                out.append(c)
+        if ai_list:
+            _emit(on_progress, "ocr_ai", f"AI 识别候选: {ai_list[0]!r}", email)
+    except Exception as e:
+        print(f"[Register] AI captcha skip: {e}")
     return out
 
 
@@ -504,6 +543,7 @@ def _is_captcha_error(code) -> bool:
         return False
 
 
+
 async def _auto_solve_and_finish(
     client: httpx.AsyncClient,
     pending: PendingRegister,
@@ -515,7 +555,12 @@ async def _auto_solve_and_finish(
     otp_timeout: float = 120.0,
     on_progress: ProgressCb = None,
 ) -> Dict[str, Any]:
-    """OCR captcha with retries, then complete register+login."""
+    """Image-code OCR (+ optional AI) with retries, then complete register+login.
+
+    Non-image types (slide / grid / recaptcha) are diagnosed and fail with clear msg.
+    """
+    from .captcha_types import CaptchaKind, diagnose_passport_response, human_error
+
     attempts: List[dict] = []
     img_bytes = first_image
     data_url = first_data_url or pending.captcha_b64
@@ -523,26 +568,41 @@ async def _auto_solve_and_finish(
 
     import asyncio
 
-    _emit(on_progress, "ocr", f"开始 OCR 识别验证码（最多 {captcha_retries} 次）", email)
+    _emit(
+        on_progress,
+        "captcha_type",
+        "目标类型: 图片字符码(CAPTCHA)；若升为滑块/九宫格/reCAPTCHA 将识别并停止硬怼 icode",
+        email,
+    )
+    _emit(on_progress, "ocr", f"开始识别图片验证码（最多 {captcha_retries} 次，ddddocr→AI）", email)
 
     for i in range(max(1, captcha_retries)):
         if img_bytes is None:
-            _emit(on_progress, "captcha", f"刷新图片验证码（第 {i + 1} 次）", email)
+            _emit(on_progress, "captcha", f"拉取图片字符码 getCode（第 {i + 1} 次）", email)
             img_bytes, data_url = await fetch_captcha(client)
             pending.captcha_b64 = data_url
             pending.cookies = _dump_cookies(client)
             _PENDING_REG[pending.session_id] = pending
 
         candidates = solve_captcha_candidates(img_bytes)
+        solver = "ddddocr" if candidates else ""
+        if not candidates or len(candidates[0]) < 3:
+            candidates = await solve_captcha_candidates_async(
+                img_bytes, on_progress=on_progress, email=email
+            )
+            if candidates:
+                solver = "ai"
+
         attempts.append({
             "try": i + 1,
             "ocr": candidates[0] if candidates else "",
             "candidates": candidates,
+            "solver": solver or "none",
             "len": len(img_bytes or b""),
+            "captcha_kind": CaptchaKind.IMAGE_CODE.value,
         })
         if not candidates or len(candidates[0]) < 3:
-            _emit(on_progress, "ocr", f"OCR 结果过短/为空，重试（{i + 1}/{captcha_retries}）", email)
-            print(f"[Register] OCR empty/too short on try {i + 1}, refresh captcha")
+            _emit(on_progress, "ocr", f"识别失败/过短，换图（{i + 1}/{captcha_retries}）", email)
             img_bytes = None
             await asyncio.sleep(0.4)
             continue
@@ -550,54 +610,119 @@ async def _auto_solve_and_finish(
         _emit(
             on_progress,
             "ocr",
-            f"OCR 识别为 {candidates[0]!r}，提交注册发信（{i + 1}/{captcha_retries}）",
+            f"[{solver or 'ocr'}] 识别为 {candidates[0]!r}，提交发信（{i + 1}/{captcha_retries}）",
             email,
         )
         captcha_ok = False
-        last_j: dict = {}
         used_icode = ""
         for icode in candidates:
             used_icode = icode
             j = await _send_email_reg_ticket(client, pending, icode)
-            last_j = j
             code = j.get("code")
             if code in (0, "0", None):
                 captcha_ok = True
                 break
             if int(code or 0) == 25001:
                 raise XiaomiRegisterError("邮箱已被注册", code=25001, data=j)
-            if not _is_captcha_error(code):
+
+            diag = diagnose_passport_response(j if isinstance(j, dict) else {})
+            _emit(
+                on_progress,
+                "captcha_type",
+                f"判定: {diag.label_zh} (code={diag.code}, reason={diag.reason or '-'})",
+                email,
+            )
+
+            if diag.kind not in (CaptchaKind.IMAGE_CODE, CaptchaKind.UNKNOWN, CaptchaKind.NONE):
                 raise XiaomiRegisterError(
-                    j.get("desc") or j.get("description") or f"发送注册邮件失败: {j}",
-                    code=int(code) if str(code).isdigit() else None,
-                    data=j,
+                    human_error(diag),
+                    code=diag.code,
+                    data={**(j if isinstance(j, dict) else {}), "captcha_diagnosis": diag.to_dict()},
                 )
-            _emit(on_progress, "ocr", f"验证码 {icode!r} 被拒，尝试变体", email)
-            print(f"[Register] captcha reject icode={icode!r} try={i + 1}")
+
+            if not _is_captcha_error(code):
+                if diag.kind == CaptchaKind.REJECT or (diag.desc and "拒绝" in str(diag.desc)):
+                    raise XiaomiRegisterError(
+                        human_error(diag),
+                        code=diag.code,
+                        data={**(j if isinstance(j, dict) else {}), "captcha_diagnosis": diag.to_dict()},
+                    )
+                raise XiaomiRegisterError(
+                    human_error(diag) if (diag.desc or diag.reason) else (
+                        j.get("desc") or j.get("description") or f"发送注册邮件失败: {j}"
+                    ),
+                    code=int(code) if str(code).isdigit() else None,
+                    data={**(j if isinstance(j, dict) else {}), "captcha_diagnosis": diag.to_dict()},
+                )
+            _emit(on_progress, "ocr", f"字符码 {icode!r} 错误，尝试变体/换图", email)
 
         if captcha_ok:
             pending.ticket_sent = True
             pending.cookies = _dump_cookies(client)
             _PENDING_REG[pending.session_id] = pending
-            _emit(on_progress, "send_ticket", f"图片验证通过（{used_icode}），注册邮件已发送", email)
-            print(f"[Register] captcha OCR ok: {used_icode!r} after {i + 1} image(s)")
+            _emit(on_progress, "send_ticket", f"图片字符码通过（{used_icode}），注册邮件已发送", email)
             result = await _finish_after_ticket_sent(
-                client,
-                pending,
-                mail_cfg,
-                otp_timeout=otp_timeout,
-                on_progress=on_progress,
+                client, pending, mail_cfg, otp_timeout=otp_timeout, on_progress=on_progress
             )
             result["captcha_auto"] = True
             result["captcha_attempts"] = attempts
             result["captcha_ocr"] = used_icode
+            result["captcha_kind"] = CaptchaKind.IMAGE_CODE.value
             return result
 
-        # all candidates failed → new image
+        # AI extra pass if ddddocr candidates all failed
+        try:
+            from .config import config_manager
+            from .captcha_ai import CaptchaAIConfig, ai_captcha_candidates
+
+            ca = config_manager.config.captcha_ai
+            if ca and ca.enabled and ca.api_base and ca.api_key:
+                _emit(on_progress, "ocr_ai", "字符码均失败，再试 AI 识图…", email)
+                ai_list = await ai_captcha_candidates(
+                    img_bytes,
+                    CaptchaAIConfig(
+                        enabled=True,
+                        api_base=ca.api_base,
+                        api_key=ca.api_key,
+                        model=ca.model,
+                        timeout=ca.timeout,
+                    ),
+                )
+                for icode in ai_list:
+                    if not icode or icode in (candidates or []):
+                        continue
+                    j = await _send_email_reg_ticket(client, pending, icode)
+                    code = j.get("code")
+                    if code in (0, "0", None):
+                        pending.ticket_sent = True
+                        pending.cookies = _dump_cookies(client)
+                        _PENDING_REG[pending.session_id] = pending
+                        _emit(on_progress, "send_ticket", f"AI 字符码通过（{icode}），邮件已发送", email)
+                        result = await _finish_after_ticket_sent(
+                            client, pending, mail_cfg, otp_timeout=otp_timeout, on_progress=on_progress
+                        )
+                        result["captcha_auto"] = True
+                        result["captcha_attempts"] = attempts
+                        result["captcha_ocr"] = icode
+                        result["captcha_kind"] = CaptchaKind.IMAGE_CODE.value
+                        result["captcha_solver"] = "ai"
+                        return result
+                    diag = diagnose_passport_response(j if isinstance(j, dict) else {})
+                    if diag.kind not in (CaptchaKind.IMAGE_CODE, CaptchaKind.UNKNOWN):
+                        raise XiaomiRegisterError(
+                            human_error(diag),
+                            code=diag.code,
+                            data={**j, "captcha_diagnosis": diag.to_dict()},
+                        )
+        except XiaomiRegisterError:
+            raise
+        except Exception as e:
+            print(f"[Register] AI retry skip: {e}")
+
         img_bytes = None
         await asyncio.sleep(0.5)
 
-    # all OCR retries failed → hand off to manual
+
     if img_bytes is None:
         try:
             img_bytes, data_url = await fetch_captcha(client)
@@ -607,21 +732,24 @@ async def _auto_solve_and_finish(
         except Exception:
             data_url = pending.captcha_b64
 
+    _emit(on_progress, "ocr", f"图片字符码识别失败（已重试 {len(attempts)} 次）", email)
     return {
         "ok": True,
         "need_captcha": True,
         "auto_captcha": True,
-        "ocr_available": True,
+        "ocr_available": ocr_available(),
         "captcha_auto_failed": True,
         "captcha_attempts": attempts,
+        "captcha_kind": CaptchaKind.IMAGE_CODE.value,
         "session_id": pending.session_id,
         "email": pending.email,
         "password": pending.password,
         "region": pending.region,
         "captcha_image": data_url or pending.captcha_b64,
         "mail_jwt": pending.mail_jwt,
-        "message": f"自动识别验证码失败（已重试 {len(attempts)} 次），请手动填写",
+        "message": f"自动识别图片字符码失败（已重试 {len(attempts)} 次），请手动填写或启用 AI 识图",
     }
+
 
 
 async def _send_email_reg_ticket(

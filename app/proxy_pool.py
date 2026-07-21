@@ -31,9 +31,40 @@ from urllib.parse import parse_qs, unquote, urlparse
 
 import httpx
 
-# project-local binary cache
-_BIN_DIR = Path(__file__).resolve().parent.parent / ".bin"
-_CONFIG_DIR = Path(__file__).resolve().parent.parent / ".singbox"
+
+def _writable_root() -> Path:
+    """Prefer project dir; fall back to /tmp for read-only container FS."""
+    candidates = []
+    env = os.getenv("MIMO2API_DATA_DIR")
+    if env:
+        candidates.append(Path(env))
+    candidates.append(Path(__file__).resolve().parent.parent)
+    candidates.append(Path("/tmp") / "mimo2api")
+    candidates.append(Path(os.getenv("TMPDIR") or os.getenv("TEMP") or "/tmp") / "mimo2api")
+    for base in candidates:
+        try:
+            base.mkdir(parents=True, exist_ok=True)
+            probe = base / ".write_test"
+            probe.write_text("ok", encoding="utf-8")
+            probe.unlink(missing_ok=True)
+            return base
+        except Exception:
+            continue
+    return Path("/tmp") / "mimo2api"
+
+
+def _bin_dir() -> Path:
+    p = _writable_root() / ".bin"
+    p.mkdir(parents=True, exist_ok=True)
+    return p
+
+
+def _config_dir() -> Path:
+    p = _writable_root() / ".singbox"
+    p.mkdir(parents=True, exist_ok=True)
+    return p
+
+
 _DEFAULT_LISTEN_PORT = 17890
 
 
@@ -281,9 +312,9 @@ def find_singbox(explicit: str = "") -> Optional[str]:
     which = shutil.which("sing-box") or shutil.which("sing-box.exe")
     if which:
         return which
-    # local cache
+    # local cache (writable root)
     for name in ("sing-box.exe", "sing-box"):
-        p = _BIN_DIR / name
+        p = _bin_dir() / name
         if p.exists():
             return str(p)
     return None
@@ -322,10 +353,10 @@ async def ensure_singbox(explicit: str = "") -> str:
     path = find_singbox(explicit)
     if path:
         return path
-    _BIN_DIR.mkdir(parents=True, exist_ok=True)
+    bin_dir = _bin_dir()
     url, member = _singbox_download_url()
-    print(f"[ProxyPool] downloading sing-box from {url}")
-    dest_zip = _BIN_DIR / "sing-box-download.bin"
+    print(f"[ProxyPool] downloading sing-box from {url} → {bin_dir}")
+    dest_zip = bin_dir / "sing-box-download.bin"
     async with httpx.AsyncClient(timeout=120.0, follow_redirects=True) as client:
         r = await client.get(url)
         if r.status_code >= 400:
@@ -336,7 +367,7 @@ async def ensure_singbox(explicit: str = "") -> str:
 
     system = platform.system().lower()
     out_name = "sing-box.exe" if system == "windows" else "sing-box"
-    out_path = _BIN_DIR / out_name
+    out_path = bin_dir / out_name
     try:
         if url.endswith(".zip"):
             with zipfile.ZipFile(dest_zip, "r") as zf:
@@ -385,7 +416,7 @@ class SingBoxProxyPool:
         self.settings = ProxyPoolSettings()
         self.nodes: List[VlessNode] = []
         self._proc: Optional[subprocess.Popen] = None
-        self._config_path = _CONFIG_DIR / "config.json"
+        self._config_path = _config_dir() / "config.json"
         self._listen_port = _DEFAULT_LISTEN_PORT
         self._selected_tag: Optional[str] = None
         self._attempt = 0
@@ -433,7 +464,8 @@ class SingBoxProxyPool:
         return nodes
 
     def _write_config(self, selected: Optional[str] = None) -> Path:
-        _CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        cfg_dir = _config_dir()
+        self._config_path = cfg_dir / "config.json"
         with self._lock:
             nodes = list(self.nodes)
             port = self._listen_port
@@ -485,7 +517,7 @@ class SingBoxProxyPool:
                 [self._binary, "run", "-c", str(self._config_path)],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.PIPE,
-                cwd=str(_CONFIG_DIR),
+                cwd=str(_config_dir()),
             )
         except Exception as e:
             self._status = "error"
@@ -562,7 +594,7 @@ class SingBoxProxyPool:
                     [self._binary or await ensure_singbox(self.settings.singbox_path), "run", "-c", str(self._config_path)],
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
-                    cwd=str(_CONFIG_DIR),
+                    cwd=str(_config_dir()),
                 )
                 for _ in range(30):
                     try:

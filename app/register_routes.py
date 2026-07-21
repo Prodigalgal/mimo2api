@@ -26,7 +26,22 @@ def _mail_cfg_from_settings():
 @router.get("/api/temp-mail/config")
 async def get_temp_mail_config(username: str = Depends(verify_admin)):
     tm = config_manager.get_temp_mail_settings()
-    return {"ok": True, "temp_mail": tm.to_dict(mask=True)}
+    out = {"ok": True, "temp_mail": tm.to_dict(mask=True), "domains": []}
+    # auto-list domains for UI (user need not type domain)
+    try:
+        from .temp_mail import TempMailConfig, list_domains
+
+        if tm.api_base:
+            cfg = TempMailConfig(
+                api_base=tm.api_base,
+                admin_password=tm.admin_password,
+                domain=tm.domain,
+                site_password=tm.site_password,
+            )
+            out["domains"] = await list_domains(cfg)
+    except Exception as e:
+        out["domains_error"] = str(e)[:120]
+    return out
 
 
 @router.post("/api/temp-mail/config")
@@ -39,8 +54,93 @@ async def save_temp_mail_config(request: Request, username: str = Depends(verify
         return {"ok": False, "error": "invalid body"}
     # allow nested or flat
     payload = data.get("temp_mail") if isinstance(data.get("temp_mail"), dict) else data
+    # domain optional — clear empty string so create_address auto-picks
+    if isinstance(payload, dict) and payload.get("domain") is not None:
+        payload["domain"] = str(payload.get("domain") or "").strip()
     tm = config_manager.update_temp_mail(payload)
-    return {"ok": True, "temp_mail": tm.to_dict(mask=True), "message": "临时邮箱配置已保存"}
+    domains = []
+    try:
+        from .temp_mail import TempMailConfig, list_domains
+
+        if tm.api_base and tm.admin_password:
+            domains = await list_domains(
+                TempMailConfig(
+                    api_base=tm.api_base,
+                    admin_password=tm.admin_password,
+                    site_password=tm.site_password,
+                )
+            )
+    except Exception:
+        pass
+    return {
+        "ok": True,
+        "temp_mail": tm.to_dict(mask=True),
+        "domains": domains,
+        "message": "临时邮箱配置已保存（域名由服务端自动获取）",
+    }
+
+
+@router.get("/api/captcha-ai/config")
+async def get_captcha_ai_config(username: str = Depends(verify_admin)):
+    ca = config_manager.get_captcha_ai_settings()
+    return {"ok": True, "captcha_ai": ca.to_dict(mask=True)}
+
+
+@router.post("/api/captcha-ai/config")
+async def save_captcha_ai_config(request: Request, username: str = Depends(verify_admin)):
+    try:
+        data = await request.json()
+    except Exception:
+        raise HTTPException(400, "invalid json")
+    if not isinstance(data, dict):
+        return {"ok": False, "error": "invalid body"}
+    payload = data.get("captcha_ai") if isinstance(data.get("captcha_ai"), dict) else data
+    ca = config_manager.update_captcha_ai(payload)
+    return {"ok": True, "captcha_ai": ca.to_dict(mask=True), "message": "AI 验证码配置已保存"}
+
+
+@router.post("/api/captcha-ai/test")
+async def test_captcha_ai(request: Request, username: str = Depends(verify_admin)):
+    """Quick vision connectivity test (no Xiaomi). Optional body overrides."""
+    from .captcha_ai import CaptchaAIConfig, solve_captcha_with_ai
+    import base64
+
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    if not isinstance(body, dict):
+        body = {}
+    ca = config_manager.get_captcha_ai_settings()
+    api_base = (body.get("api_base") or ca.api_base or "").strip()
+    api_key = body.get("api_key") or ca.api_key
+    if isinstance(api_key, str) and "***" in api_key:
+        api_key = ca.api_key
+    model = (body.get("model") or ca.model or "grok").strip()
+    cfg = CaptchaAIConfig(
+        enabled=True,
+        api_base=api_base,
+        api_key=str(api_key or ""),
+        model=model,
+        timeout=int(body.get("timeout") or ca.timeout or 60),
+    )
+    if not cfg.is_ready():
+        return {"ok": False, "error": "请填写 AI API 地址与 Key"}
+    # 1x1 png smoke
+    png = base64.b64decode(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+    )
+    try:
+        code = await solve_captcha_with_ai(png, cfg)
+        return {
+            "ok": True,
+            "message": "AI 接口可调用（测试图不一定有字符）",
+            "sample_reply": code or "(空)",
+            "model": cfg.model,
+            "api_base": cfg.api_base,
+        }
+    except Exception as e:
+        return {"ok": False, "error": str(e)[:300]}
 
 
 @router.post("/api/temp-mail/test")

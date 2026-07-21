@@ -168,6 +168,34 @@ class ProxyPoolConfig:
 
 
 @dataclass
+class CaptchaAISettings:
+    """Vision API 辅助过验证码（OpenAI 兼容网关）"""
+    enabled: bool = False
+    api_base: str = ""
+    api_key: str = ""
+    model: str = "grok"
+    timeout: int = 60
+
+    def normalized(self) -> "CaptchaAISettings":
+        return CaptchaAISettings(
+            enabled=bool(self.enabled),
+            api_base=(self.api_base or "").strip().rstrip("/"),
+            api_key=(self.api_key or "").strip(),
+            model=(self.model or "grok").strip() or "grok",
+            timeout=_clamp_int(self.timeout, 60, 15, 180),
+        )
+
+    def to_dict(self, mask: bool = True) -> dict:
+        n = self.normalized()
+        d = asdict(n)
+        if mask and n.api_key:
+            k = n.api_key
+            d["api_key"] = (k[:6] + "***" + k[-4:]) if len(k) > 12 else "***"
+        d["configured"] = bool(n.api_base and n.api_key)
+        return d
+
+
+@dataclass
 class Config:
     """应用配置"""
     api_keys: str = "sk-default"
@@ -177,6 +205,7 @@ class Config:
     tools_passthrough: bool = False  # 全局工具透传模式
     temp_mail: TempMailSettings = None
     proxy_pool: ProxyPoolConfig = None
+    captcha_ai: CaptchaAISettings = None
 
     def __post_init__(self):
         if self.mimo_accounts is None:
@@ -187,6 +216,8 @@ class Config:
             self.temp_mail = TempMailSettings()
         if self.proxy_pool is None:
             self.proxy_pool = ProxyPoolConfig()
+        if self.captcha_ai is None:
+            self.captcha_ai = CaptchaAISettings()
 
     def to_dict(self):
         d = {
@@ -196,6 +227,7 @@ class Config:
             "tools_passthrough": self.tools_passthrough,
             "temp_mail": self.temp_mail.to_dict(mask=True) if self.temp_mail else TempMailSettings().to_dict(),
             "proxy_pool": self.proxy_pool.to_dict(mask=True) if self.proxy_pool else ProxyPoolConfig().to_dict(),
+            "captcha_ai": self.captcha_ai.to_dict(mask=True) if self.captcha_ai else CaptchaAISettings().to_dict(),
         }
         if self.models:
             d["models"] = self.models
@@ -209,6 +241,7 @@ class Config:
         }
         tm = self.temp_mail or TempMailSettings()
         pp = self.proxy_pool or ProxyPoolConfig()
+        ca = self.captcha_ai or CaptchaAISettings()
         d = {
             "api_keys": self.api_keys,
             "admin_password": self.admin_password,
@@ -223,6 +256,7 @@ class Config:
             "tools_passthrough": self.tools_passthrough,
             "temp_mail": asdict(tm.normalized()),
             "proxy_pool": asdict(pp.normalized()),
+            "captcha_ai": asdict(ca.normalized()),
         }
         if self.models:
             d["models"] = self.models
@@ -289,6 +323,7 @@ class ConfigManager:
                     tools_passthrough=data.get('tools_passthrough', False),
                     temp_mail=self._parse_temp_mail(data),
                     proxy_pool=self._parse_proxy_pool(data),
+                    captcha_ai=self._parse_captcha_ai(data),
                 )
         except Exception as e:
             print(f"加载配置失败: {e}")
@@ -343,6 +378,45 @@ class ConfigManager:
     def get_proxy_pool_settings(self) -> ProxyPoolConfig:
         with self.lock:
             return (self.config.proxy_pool or ProxyPoolConfig()).normalized()
+
+    @staticmethod
+    def _parse_captcha_ai(data: dict) -> CaptchaAISettings:
+        raw = data.get("captcha_ai") or {}
+        if not isinstance(raw, dict):
+            raw = {}
+        en = raw.get("enabled", False)
+        if isinstance(en, str):
+            en = en.strip().lower() not in ("0", "false", "no", "off")
+        return CaptchaAISettings(
+            enabled=bool(en),
+            api_base=str(raw.get("api_base") or ""),
+            api_key=str(raw.get("api_key") or ""),
+            model=str(raw.get("model") or "grok"),
+            timeout=_clamp_int(raw.get("timeout", 60), 60, 15, 180),
+        ).normalized()
+
+    def get_captcha_ai_settings(self) -> CaptchaAISettings:
+        with self.lock:
+            return (self.config.captcha_ai or CaptchaAISettings()).normalized()
+
+    def update_captcha_ai(self, data: dict, *, keep_secrets_if_masked: bool = True) -> CaptchaAISettings:
+        with self.lock:
+            prev = (self.config.captcha_ai or CaptchaAISettings()).normalized()
+            en = data.get("enabled", prev.enabled)
+            if isinstance(en, str):
+                en = en.strip().lower() not in ("0", "false", "no", "off")
+            key = data.get("api_key")
+            if key is None or (keep_secrets_if_masked and isinstance(key, str) and "***" in key):
+                key = prev.api_key
+            self.config.captcha_ai = CaptchaAISettings(
+                enabled=bool(en),
+                api_base=str(data.get("api_base", prev.api_base) or "").strip().rstrip("/"),
+                api_key=str(key or "").strip(),
+                model=str(data.get("model", prev.model) or "grok").strip() or "grok",
+                timeout=_clamp_int(data.get("timeout", prev.timeout), prev.timeout, 15, 180),
+            ).normalized()
+            self.save()
+            return self.config.captcha_ai
 
     def update_proxy_pool(self, data: dict, *, keep_secrets_if_masked: bool = True) -> ProxyPoolConfig:
         with self.lock:
@@ -464,6 +538,21 @@ class ConfigManager:
             else:
                 proxy_pool = prev_pp
 
+            prev_ca = self.config.captcha_ai or CaptchaAISettings()
+            ca_raw = new_config.get("captcha_ai")
+            if isinstance(ca_raw, dict):
+                cap = dict(ca_raw)
+                if cap.get("api_key") is None or (
+                    isinstance(cap.get("api_key"), str) and "***" in cap.get("api_key", "")
+                ):
+                    cap["api_key"] = prev_ca.api_key
+                for k in CaptchaAISettings.__dataclass_fields__:
+                    if k not in cap or cap[k] is None:
+                        cap[k] = getattr(prev_ca, k)
+                captcha_ai = self._parse_captcha_ai({"captcha_ai": cap})
+            else:
+                captcha_ai = prev_ca
+
             self.config = Config(
                 api_keys=new_config.get('api_keys', 'sk-default'),
                 admin_password=new_config.get('admin_password', 'admin'),
@@ -472,6 +561,7 @@ class ConfigManager:
                 tools_passthrough=new_config.get('tools_passthrough', False),
                 temp_mail=temp_mail,
                 proxy_pool=proxy_pool,
+                captcha_ai=captcha_ai,
             )
             self.save()
 

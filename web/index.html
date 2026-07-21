@@ -331,8 +331,8 @@
                             <option value="BR">Brazil (BR)</option>
                         </select>
                     </div>
-                    <div class="field"><label>域名（可选，留空用配置默认）</label>
-                        <input type="text" id="reg-domain" placeholder="例如 edu.omnnu.xyz">
+                    <div class="field" style="display:none"><label>域名（已自动获取，无需填写）</label>
+                        <input type="text" id="reg-domain" placeholder="自动" value="">
                     </div>
                     <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
                         <div class="field"><label>成功目标数（达到即停，0=不提前停）</label>
@@ -387,24 +387,52 @@
                 <!-- 临时邮箱配置（仅邮箱服务，不含注册参数） -->
                 <div id="panel-tempmail" class="tab-panel">
                     <div class="status info">对接 <a href="https://github.com/dreamhunter2333/cloudflare_temp_email" target="_blank" style="color:var(--primary)">cloudflare_temp_email</a> 自建实例。<br>
-                        仅配置邮箱 API。注册并发/地区等参数请到 <b>自动注册</b> 页设置并保存。</div>
+                        只需 API 地址与管理口令。<b>邮箱域名自动从服务端获取</b>，无需手填。注册参数在「自动注册」页。</div>
                     <div class="field"><label>API 地址</label>
                         <input type="url" id="tm-api" placeholder="https://apimail.example.com">
                     </div>
                     <div class="field"><label>管理口令 (x-admin-auth)</label>
                         <input type="password" id="tm-admin" placeholder="ADMIN_PASSWORDS 中的口令" autocomplete="off">
                     </div>
-                    <div class="field"><label>默认域名（可选）</label>
-                        <input type="text" id="tm-domain" placeholder="留空则使用服务端第一个域名">
-                    </div>
                     <div class="field"><label>站点密码 x-custom-auth（可选）</label>
                         <input type="password" id="tm-site" placeholder="若部署启用了站点密码则填写" autocomplete="off">
+                    </div>
+                    <div class="field"><label>可用域名（自动检测，只读）</label>
+                        <div id="tm-domains" style="font-size:12px;color:var(--text-muted);padding:8px 0">保存/测试后显示</div>
                     </div>
                     <div class="btn-group">
                         <button class="btn-outline" onclick="testTempMail()">测试连接</button>
                         <button class="btn-primary" onclick="saveTempMail()">保存邮箱配置</button>
                     </div>
                     <div id="tmResult"></div>
+                    <div style="margin:20px 0 8px;font-size:13px;font-weight:600;color:var(--text-muted)">AI 辅助识图（图片字符码）</div>
+                    <div class="status info" style="margin-top:0">ddddocr 失败时调用视觉模型。滑块/九宫格/reCAPTCHA 会识别类型并提示，暂不自动解。</div>
+                    <label class="toggle-row" style="margin:8px 0 12px">
+                        <span class="toggle-label">启用 AI 识图验证码</span>
+                        <label class="switch">
+                            <input type="checkbox" id="cai-enabled">
+                            <span class="slider"></span>
+                        </label>
+                    </label>
+                    <div class="field"><label>API Base（OpenAI 兼容）</label>
+                        <input type="url" id="cai-base" placeholder="https://sub2api.example.com">
+                    </div>
+                    <div class="field"><label>API Key</label>
+                        <input type="password" id="cai-key" placeholder="sk-..." autocomplete="off">
+                    </div>
+                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+                        <div class="field"><label>模型</label>
+                            <input type="text" id="cai-model" placeholder="grok" value="grok">
+                        </div>
+                        <div class="field"><label>超时（秒）</label>
+                            <input type="number" id="cai-timeout" min="15" max="180" value="60">
+                        </div>
+                    </div>
+                    <div class="btn-group">
+                        <button class="btn-outline" onclick="testCaptchaAI()">测试 AI</button>
+                        <button class="btn-primary" onclick="saveCaptchaAI()">保存 AI 配置</button>
+                    </div>
+                    <div id="caiResult"></div>
                 </div>
 
                 <!-- VLESS 代理池 (sing-box) -->
@@ -890,17 +918,28 @@ let cfg = { api_keys: '', mimo_accounts: [] }, parsed = null;
             } catch (e) {}
         }
 
-        function applyTempMailForm(tm) {
+        function renderTmDomains(domains) {
+            const el = $id('tm-domains');
+            if (!el) return;
+            if (domains && domains.length) {
+                el.innerHTML = domains.map(function (d) {
+                    return '<code style="margin-right:8px">' + d + '</code>';
+                }).join('') + ' <span style="color:#34d399">（注册时自动选用）</span>';
+            } else {
+                el.textContent = '尚未检测到域名（保存/测试后自动获取）';
+            }
+        }
+
+        function applyTempMailForm(tm, domains) {
             if (!tm) return;
             if ($id('tm-api')) $id('tm-api').value = tm.api_base || '';
-            if ($id('tm-domain')) $id('tm-domain').value = tm.domain || '';
             if ($id('tm-admin') && tm.admin_password && tm.admin_password.indexOf('***') === -1) {
                 $id('tm-admin').value = tm.admin_password;
             }
             if ($id('tm-site') && tm.site_password && tm.site_password.indexOf('***') === -1) {
                 $id('tm-site').value = tm.site_password;
             }
-            // register params only on register panel
+            if (domains) renderTmDomains(domains);
             applyRegFormFromTm(tm);
         }
 
@@ -911,11 +950,7 @@ let cfg = { api_keys: '', mimo_accounts: [] }, parsed = null;
                 const rv = String(tm.register_region).toUpperCase();
                 if ([...sel.options].some(o => o.value === rv)) sel.value = rv;
             }
-            if ($id('reg-domain') && tm.domain) {
-                $id('reg-domain').placeholder = tm.domain;
-                // don't overwrite user-typed domain unless empty
-                if (!$id('reg-domain').value) $id('reg-domain').value = '';
-            }
+            if ($id('reg-domain')) $id('reg-domain').value = '';
             if ($id('reg-batch-count')) $id('reg-batch-count').value = tm.batch_count != null ? tm.batch_count : 1;
             if ($id('reg-success-target')) $id('reg-success-target').value = tm.success_target != null ? tm.success_target : 1;
             if ($id('reg-concurrent')) $id('reg-concurrent').value = tm.concurrent != null ? tm.concurrent : 1;
@@ -925,11 +960,21 @@ let cfg = { api_keys: '', mimo_accounts: [] }, parsed = null;
             if ($id('reg-auto-ocr')) $id('reg-auto-ocr').checked = tm.auto_captcha !== false;
         }
 
+        function applyCaptchaAIForm(ca) {
+            if (!ca) return;
+            if ($id('cai-enabled')) $id('cai-enabled').checked = !!ca.enabled;
+            if ($id('cai-base')) $id('cai-base').value = ca.api_base || '';
+            if ($id('cai-key') && ca.api_key && String(ca.api_key).indexOf('***') === -1) {
+                $id('cai-key').value = ca.api_key;
+            }
+            if ($id('cai-model')) $id('cai-model').value = ca.model || 'grok';
+            if ($id('cai-timeout')) $id('cai-timeout').value = ca.timeout || 60;
+        }
+
         function collectTempMailBody() {
-            // mailbox credentials only — never overwrite register settings with missing fields
             const body = {
                 api_base: $id('tm-api').value.trim(),
-                domain: $id('tm-domain').value.trim(),
+                domain: '', // always auto
             };
             const admin = $id('tm-admin').value;
             const site = $id('tm-site').value;
@@ -938,11 +983,23 @@ let cfg = { api_keys: '', mimo_accounts: [] }, parsed = null;
             return body;
         }
 
+        function collectCaptchaAIBody() {
+            const body = {
+                enabled: $id('cai-enabled') ? $id('cai-enabled').checked : false,
+                api_base: $id('cai-base') ? $id('cai-base').value.trim() : '',
+                model: $id('cai-model') ? $id('cai-model').value.trim() : 'grok',
+                timeout: parseInt($id('cai-timeout') && $id('cai-timeout').value, 10) || 60,
+            };
+            const key = $id('cai-key') ? $id('cai-key').value.trim() : '';
+            if (key) body.api_key = key;
+            return body;
+        }
+
         function collectRegRunParams() {
             const st = parseInt($id('reg-success-target').value, 10);
             return {
                 region: $id('reg-region').value || 'RANDOM',
-                domain: $id('reg-domain').value.trim(),
+                domain: '', // auto from temp-mail provider
                 batch_count: parseInt($id('reg-batch-count').value, 10) || 1,
                 success_target: isNaN(st) ? 1 : st,
                 concurrent: parseInt($id('reg-concurrent').value, 10) || 1,
@@ -957,7 +1014,7 @@ let cfg = { api_keys: '', mimo_accounts: [] }, parsed = null;
             const p = collectRegRunParams();
             return {
                 register_region: p.region,
-                // only send domain if user typed one on reg panel (optional override of mailbox domain)
+                domain: '',
                 batch_count: p.batch_count,
                 success_target: p.success_target,
                 concurrent: p.concurrent,
@@ -972,7 +1029,9 @@ let cfg = { api_keys: '', mimo_accounts: [] }, parsed = null;
             try {
                 const r = await fetch('/api/temp-mail/config');
                 const j = await r.json();
-                if (j.temp_mail) applyTempMailForm(j.temp_mail);
+                if (j.temp_mail) applyTempMailForm(j.temp_mail, j.domains);
+                const ca = await fetch('/api/captcha-ai/config').then(function (x) { return x.json(); }).catch(function () { return null; });
+                if (ca && ca.captcha_ai) applyCaptchaAIForm(ca.captcha_ai);
             } catch (e) {}
         }
 
@@ -988,12 +1047,56 @@ let cfg = { api_keys: '', mimo_accounts: [] }, parsed = null;
                 if (j.ok) {
                     showStatus('tmResult', 'ok', j.message || '邮箱配置已保存');
                     toast('邮箱配置已保存');
-                    if (j.temp_mail) applyTempMailForm(j.temp_mail);
+                    if (j.temp_mail) applyTempMailForm(j.temp_mail, j.domains);
                 } else {
                     showStatus('tmResult', 'err', j.error || '保存失败');
                 }
             } catch (e) {
                 showStatus('tmResult', 'err', '保存失败: ' + e.message);
+            }
+        }
+
+        async function saveCaptchaAI() {
+            try {
+                const j = await apiFetch('/api/captcha-ai/config', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(collectCaptchaAIBody()),
+                });
+                if (j.ok) {
+                    showStatus('caiResult', 'ok', j.message || 'AI 配置已保存');
+                    toast('AI 验证码配置已保存');
+                    if (j.captcha_ai) applyCaptchaAIForm(j.captcha_ai);
+                } else {
+                    showStatus('caiResult', 'err', j.error || '保存失败');
+                }
+            } catch (e) {
+                showStatus('caiResult', 'err', e.message || String(e));
+            }
+        }
+
+        async function testCaptchaAI() {
+            showStatus('caiResult', 'info', '测试 AI 接口…');
+            try {
+                // save first so server has key
+                await apiFetch('/api/captcha-ai/config', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(collectCaptchaAIBody()),
+                });
+                const j = await apiFetch('/api/captcha-ai/test', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(collectCaptchaAIBody()),
+                });
+                if (j.ok) {
+                    showStatus('caiResult', 'ok', (j.message || 'OK') + '<br>model: ' + (j.model || '') + '<br>reply: ' + (j.sample_reply || ''));
+                    toast('AI 接口可用');
+                } else {
+                    showStatus('caiResult', 'err', j.error || '测试失败');
+                }
+            } catch (e) {
+                showStatus('caiResult', 'err', e.message || String(e));
             }
         }
 
@@ -1020,7 +1123,7 @@ let cfg = { api_keys: '', mimo_accounts: [] }, parsed = null;
 
         async function testTempMail() {
             const body = collectTempMailBody();
-            showStatus('tmResult', 'info', '测试中...');
+            showStatus('tmResult', 'info', '测试中（将自动获取域名并创建测试邮箱）...');
             try {
                 const r = await fetch('/api/temp-mail/test', {
                     method: 'POST',
@@ -1030,7 +1133,8 @@ let cfg = { api_keys: '', mimo_accounts: [] }, parsed = null;
                 const j = await r.json();
                 if (j.ok) {
                     const domains = (j.domains || []).join(', ');
-                    showStatus('tmResult', 'ok', (j.message || 'OK') + (domains ? '<br>域名: ' + domains : '') + (j.version ? '<br>版本: ' + j.version : ''));
+                    showStatus('tmResult', 'ok', (j.message || 'OK') + (domains ? '<br>域名: ' + domains : '') + (j.version ? '<br>版本: ' + j.version : '') + (j.test_address ? '<br>测试邮箱: ' + j.test_address : ''));
+                    renderTmDomains(j.domains || []);
                     toast('临时邮箱连接成功');
                 } else {
                     showStatus('tmResult', 'err', j.error || '测试失败');

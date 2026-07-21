@@ -24,5 +24,12 @@
     "rotate_every": 1,
     "refresh_interval": 3600
   },
+  "captcha_ai": {
+    "enabled": false,
+    "api_base": "https://sub2api.example.com",
+    "api_key": "sk-xxx",
+    "model": "grok",
+    "timeout": 60
+  },
   "mimo_accounts": []
 }

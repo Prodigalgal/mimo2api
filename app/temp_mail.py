@@ -84,6 +84,30 @@ def _random_local_part(length: int = 10) -> str:
     return first + rest
 
 
+async def resolve_domain(
+    cfg: TempMailConfig,
+    preferred: Optional[str] = None,
+    *,
+    random_pick: bool = True,
+) -> str:
+    """Pick a mailbox domain. Prefer API open_api/settings; user domain is optional override only."""
+    preferred = (preferred or "").strip()
+    domains = await list_domains(cfg)
+    if not domains:
+        # fall back to configured domain if settings empty
+        if (cfg.domain or "").strip():
+            return cfg.domain.strip()
+        if preferred:
+            return preferred
+        raise TempMailError("临时邮箱未返回可用域名，请检查 API 地址与管理口令")
+    if preferred and preferred in domains:
+        return preferred
+    # ignore stale/wrong preferred not in list — auto pick
+    if random_pick and len(domains) > 1:
+        return random.choice(domains)
+    return domains[0]
+
+
 async def create_address(
     cfg: TempMailConfig,
     *,
@@ -94,12 +118,8 @@ async def create_address(
         raise TempMailError("请先在管理面板配置临时邮箱 API 与管理口令")
 
     base = cfg.normalized_base()
-    domain = (domain or cfg.domain or "").strip()
-    if not domain:
-        domains = await list_domains(cfg)
-        if not domains:
-            raise TempMailError("临时邮箱未返回可用域名")
-        domain = domains[0]
+    # Auto-fetch domains from provider; do not require user to type domain
+    domain = await resolve_domain(cfg, preferred=domain or cfg.domain, random_pick=True)
 
     name = (name or _random_local_part()).strip().lower()
     payload = {"name": name, "domain": domain}
@@ -254,12 +274,16 @@ async def test_connection(cfg: TempMailConfig) -> Dict[str, Any]:
             "enable_user_create": settings.get("enableUserCreateEmail"),
         }
         if cfg.admin_password:
-            # try create + immediate read settings with jwt
-            addr = await create_address(cfg, domain=(cfg.domain or None))
+            # auto domain from API list — no need for user-filled domain
+            addr = await create_address(cfg, domain=None)
             info = await get_settings(cfg, addr.jwt)
             result["test_address"] = addr.address
+            result["auto_domain"] = addr.address.split("@")[-1] if "@" in addr.address else ""
             result["test_jwt_ok"] = bool(info.get("address"))
-            result["message"] = f"连接成功，已创建测试邮箱 {addr.address}"
+            result["message"] = (
+                f"连接成功，已自动选域并创建测试邮箱 {addr.address}"
+                + (f"（可用域名: {', '.join(map(str, domains))}）" if domains else "")
+            )
         else:
             result["message"] = "已读取 open_api/settings（未配置管理口令，跳过创建测试）"
         return result
