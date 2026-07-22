@@ -344,13 +344,13 @@
                     </div>
                     <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
                         <div class="field"><label>成功目标数（达到即停，0=不提前停）</label>
-                            <input type="number" id="reg-success-target" min="0" max="50" value="1" title="成功注册多少个后结束">
+                            <input type="number" id="reg-success-target" min="0" max="200" value="1" title="成功注册多少个后结束；若大于最大尝试次数会自动抬高尝试上限">
                         </div>
                         <div class="field"><label>最大尝试次数</label>
-                            <input type="number" id="reg-batch-count" min="1" max="50" value="1" title="最多尝试多少次">
+                            <input type="number" id="reg-batch-count" min="1" max="200" value="1" title="最多尝试多少次">
                         </div>
                         <div class="field"><label>并发数</label>
-                            <input type="number" id="reg-concurrent" min="1" max="10" value="1">
+                            <input type="number" id="reg-concurrent" min="1" max="20" value="1">
                         </div>
                         <div class="field"><label>并发间隔（秒）</label>
                             <input type="number" id="reg-interval" min="0" max="300" step="0.5" value="3">
@@ -1025,11 +1025,18 @@ let cfg = { api_keys: '', mimo_accounts: [] }, parsed = null;
 
         function collectRegRunParams() {
             const st = parseInt($id('reg-success-target').value, 10);
+            let batch = parseInt($id('reg-batch-count').value, 10) || 1;
+            const successTarget = isNaN(st) ? 1 : st;
+            // keep max attempts >= success target so save won't snap target down
+            if (successTarget > 0 && successTarget > batch) {
+                batch = successTarget;
+                if ($id('reg-batch-count')) $id('reg-batch-count').value = batch;
+            }
             return {
                 region: $id('reg-region').value || 'RANDOM',
                 domain: '', // auto from temp-mail provider
-                batch_count: parseInt($id('reg-batch-count').value, 10) || 1,
-                success_target: isNaN(st) ? 1 : st,
+                batch_count: batch,
+                success_target: successTarget,
                 concurrent: parseInt($id('reg-concurrent').value, 10) || 1,
                 concurrent_interval: parseFloat($id('reg-interval').value) || 0,
                 captcha_retries: parseInt($id('reg-captcha-retries').value, 10) || 10,
@@ -1138,9 +1145,12 @@ let cfg = { api_keys: '', mimo_accounts: [] }, parsed = null;
                 });
                 const j = await r.json();
                 if (j.ok) {
-                    showStatus('regResult', 'ok', '注册参数已保存');
-                    toast('注册参数已保存');
                     if (j.temp_mail) applyRegFormFromTm(j.temp_mail);
+                    const st = (j.temp_mail && j.temp_mail.success_target != null) ? j.temp_mail.success_target : body.success_target;
+                    const bc = (j.temp_mail && j.temp_mail.batch_count != null) ? j.temp_mail.batch_count : body.batch_count;
+                    showStatus('regResult', 'ok',
+                        '注册参数已保存<br>成功目标 <b>' + st + '</b> · 最大尝试 <b>' + bc + '</b>');
+                    toast('注册参数已保存：目标 ' + st);
                 } else {
                     showStatus('regResult', 'err', j.error || '保存失败');
                 }

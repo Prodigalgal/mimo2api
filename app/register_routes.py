@@ -624,14 +624,15 @@ async def auto_register_batch(request: Request, username: str = Depends(verify_a
     from .config import _clamp_int, _clamp_float
 
     max_attempts = _clamp_int(
-        data.get("count", data.get("batch_count", tm.batch_count)), tm.batch_count, 1, 50
+        data.get("count", data.get("batch_count", tm.batch_count)), tm.batch_count, 1, 200
     )
     success_target = _clamp_int(
-        data.get("success_target", tm.success_target), tm.success_target, 0, 50
+        data.get("success_target", tm.success_target), tm.success_target, 0, 200
     )
-    if success_target > max_attempts:
-        success_target = max_attempts
-    concurrent = _clamp_int(data.get("concurrent", tm.concurrent), tm.concurrent, 1, 10)
+    # never shrink success target to batch — raise attempt cap instead
+    if success_target > 0 and success_target > max_attempts:
+        max_attempts = success_target
+    concurrent = _clamp_int(data.get("concurrent", tm.concurrent), tm.concurrent, 1, 20)
     interval = _clamp_float(
         data.get("concurrent_interval", tm.concurrent_interval), tm.concurrent_interval, 0.0, 300.0
     )

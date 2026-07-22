@@ -67,15 +67,15 @@ def apply_env_overrides(config: Any) -> Any:
             )
         if os.getenv("MIMO2API_REGISTER_BATCH_COUNT") is not None:
             tm.batch_count = _clamp_int(
-                os.getenv("MIMO2API_REGISTER_BATCH_COUNT"), tm.batch_count, 1, 50
+                os.getenv("MIMO2API_REGISTER_BATCH_COUNT"), tm.batch_count, 1, 200
             )
         if os.getenv("MIMO2API_REGISTER_SUCCESS_TARGET") is not None:
             tm.success_target = _clamp_int(
-                os.getenv("MIMO2API_REGISTER_SUCCESS_TARGET"), tm.success_target, 0, 50
+                os.getenv("MIMO2API_REGISTER_SUCCESS_TARGET"), tm.success_target, 0, 200
             )
         if os.getenv("MIMO2API_REGISTER_CONCURRENT") is not None:
             tm.concurrent = _clamp_int(
-                os.getenv("MIMO2API_REGISTER_CONCURRENT"), tm.concurrent, 1, 10
+                os.getenv("MIMO2API_REGISTER_CONCURRENT"), tm.concurrent, 1, 20
             )
         if os.getenv("MIMO2API_REGISTER_INTERVAL") is not None:
             tm.concurrent_interval = _clamp_float(

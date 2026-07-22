@@ -56,11 +56,14 @@ class TempMailSettings:
             region = "US"
         if region in ("RAND", "AUTO", "*", "RND"):
             region = "RANDOM"
-        batch = _clamp_int(self.batch_count, 1, 1, 50)
-        # success_target: 0 means no early stop; otherwise 1..batch
-        st = _clamp_int(self.success_target, 1, 0, 50)
-        if st > batch:
-            st = batch
+        # Allow larger campaigns; success_target must not be silently truncated.
+        batch = _clamp_int(self.batch_count, 1, 1, 200)
+        # 0 = no early stop; otherwise 1..200
+        st = _clamp_int(self.success_target, 1, 0, 200)
+        # If user raises success target above max attempts, expand attempts
+        # (previous bug: st was forced down to batch, e.g. 40 → 5)
+        if st > 0 and st > batch:
+            batch = st
         return TempMailSettings(
             api_base=(self.api_base or "").strip().rstrip("/"),
             admin_password=self.admin_password or "",
@@ -69,7 +72,7 @@ class TempMailSettings:
             register_region=region,
             batch_count=batch,
             success_target=st,
-            concurrent=_clamp_int(self.concurrent, 1, 1, 10),
+            concurrent=_clamp_int(self.concurrent, 1, 1, 20),
             concurrent_interval=_clamp_float(self.concurrent_interval, 3.0, 0.0, 300.0),
             captcha_retries=_clamp_int(self.captcha_retries, 10, 1, 30),
             otp_timeout=_clamp_int(self.otp_timeout, 120, 30, 600),
@@ -303,9 +306,9 @@ class ConfigManager:
             domain=str(g("domain", "") or ""),
             site_password=str(g("site_password", "") or ""),
             register_region=str(g("register_region", "US") or "US"),
-            batch_count=_clamp_int(g("batch_count", 1), 1, 1, 50),
-            success_target=_clamp_int(g("success_target", 1), 1, 0, 50),
-            concurrent=_clamp_int(g("concurrent", 1), 1, 1, 10),
+            batch_count=_clamp_int(g("batch_count", 1), 1, 1, 200),
+            success_target=_clamp_int(g("success_target", 1), 1, 0, 200),
+            concurrent=_clamp_int(g("concurrent", 1), 1, 1, 20),
             concurrent_interval=_clamp_float(g("concurrent_interval", 3.0), 3.0, 0.0, 300.0),
             captcha_retries=_clamp_int(g("captcha_retries", 10), 10, 1, 30),
             otp_timeout=_clamp_int(g("otp_timeout", 120), 120, 30, 600),
@@ -510,9 +513,9 @@ class ConfigManager:
                 domain=str(merged.get("domain") or "").strip(),
                 site_password=str(site_password or ""),
                 register_region=str(merged.get("register_region") or "US"),
-                batch_count=_clamp_int(merged.get("batch_count"), 1, 1, 50),
-                success_target=_clamp_int(merged.get("success_target"), 1, 0, 50),
-                concurrent=_clamp_int(merged.get("concurrent"), 1, 1, 10),
+                batch_count=_clamp_int(merged.get("batch_count"), 1, 1, 200),
+                success_target=_clamp_int(merged.get("success_target"), 1, 0, 200),
+                concurrent=_clamp_int(merged.get("concurrent"), 1, 1, 20),
                 concurrent_interval=_clamp_float(merged.get("concurrent_interval"), 3.0, 0.0, 300.0),
                 captcha_retries=_clamp_int(merged.get("captcha_retries"), 10, 1, 30),
                 otp_timeout=_clamp_int(merged.get("otp_timeout"), 120, 30, 600),
