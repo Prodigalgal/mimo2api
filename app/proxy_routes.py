@@ -79,7 +79,20 @@ async def proxy_start(username: str = Depends(verify_admin)):
 @router.post("/stop")
 async def proxy_stop(username: str = Depends(verify_admin)):
     st = proxy_pool.stop()
-    return {"ok": True, "message": "已停止", **st}
+    return {"ok": True, "message": "已停止并回收 sing-box 进程", **st}
+
+
+@router.post("/reclaim")
+async def proxy_reclaim(username: str = Depends(verify_admin)):
+    """Force reclaim orphan sing-box processes / port holders."""
+    _apply_settings_from_config()
+    info = proxy_pool.reclaim_all(reason="api-reclaim")
+    return {
+        "ok": True,
+        "message": f"已回收进程 {info.get('killed') or []}",
+        **info,
+        **proxy_pool.status(),
+    }
 
 
 @router.post("/refresh")

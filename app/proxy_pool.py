@@ -414,8 +414,171 @@ async def ensure_singbox(explicit: str = "") -> str:
     return str(out_path)
 
 
+def _pid_file() -> Path:
+    return _config_dir() / "sing-box.pid"
+
+
+def _kill_pid(pid: int, *, force: bool = False) -> bool:
+    """Terminate a process by pid. Returns True if signal/kill was sent or already gone."""
+    if pid <= 0:
+        return False
+    try:
+        if platform.system().lower() == "windows":
+            # /T kills child tree
+            flags = ["/F", "/T", "/PID", str(pid)] if force else ["/T", "/PID", str(pid)]
+            subprocess.run(
+                ["taskkill", *flags],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=False,
+            )
+            return True
+        import signal
+
+        try:
+            os.kill(pid, signal.SIGKILL if force else signal.SIGTERM)
+        except ProcessLookupError:
+            return True
+        return True
+    except Exception as e:
+        print(f"[ProxyPool] kill pid={pid} failed: {e}")
+        return False
+
+
+def _pid_alive(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    try:
+        if platform.system().lower() == "windows":
+            out = subprocess.run(
+                ["tasklist", "/FI", f"PID eq {pid}", "/NH"],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            return str(pid) in (out.stdout or "")
+        os.kill(pid, 0)
+        return True
+    except Exception:
+        return False
+
+
+def _pids_listening_on_port(port: int) -> List[int]:
+    """Best-effort find PIDs bound to local TCP port."""
+    pids: List[int] = []
+    system = platform.system().lower()
+    try:
+        if system == "windows":
+            out = subprocess.run(
+                ["netstat", "-ano", "-p", "tcp"],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            for line in (out.stdout or "").splitlines():
+                #  TCP    127.0.0.1:17890    ... LISTENING    1234
+                if f":{port}" not in line or "LISTENING" not in line.upper():
+                    continue
+                parts = line.split()
+                if not parts:
+                    continue
+                try:
+                    pid = int(parts[-1])
+                except Exception:
+                    continue
+                if pid > 0 and pid not in pids:
+                    pids.append(pid)
+        else:
+            # ss -ltnp 'sport = :17890'
+            out = subprocess.run(
+                ["ss", "-ltnp", f"sport = :{port}"],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            import re as _re
+
+            for m in _re.finditer(r"pid=(\d+)", out.stdout or ""):
+                pid = int(m.group(1))
+                if pid not in pids:
+                    pids.append(pid)
+            if not pids:
+                out2 = subprocess.run(
+                    ["lsof", f"-iTCP:{port}", "-sTCP:LISTEN", "-t"],
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                for line in (out2.stdout or "").splitlines():
+                    try:
+                        pid = int(line.strip())
+                    except Exception:
+                        continue
+                    if pid not in pids:
+                        pids.append(pid)
+    except Exception as e:
+        print(f"[ProxyPool] port scan failed: {e}")
+    return pids
+
+
+def _pids_matching_singbox_config(config_path: Path) -> List[int]:
+    """Find sing-box processes started with our config path (orphans)."""
+    pids: List[int] = []
+    cfg = str(config_path).replace("\\", "/").lower()
+    system = platform.system().lower()
+    try:
+        if system == "windows":
+            # wmic may be unavailable; use powershell
+            ps = (
+                "Get-CimInstance Win32_Process -Filter \"Name='sing-box.exe'\" | "
+                "Select-Object ProcessId,CommandLine | ConvertTo-Json -Compress"
+            )
+            out = subprocess.run(
+                ["powershell", "-NoProfile", "-Command", ps],
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=15,
+            )
+            raw = (out.stdout or "").strip()
+            if not raw:
+                return pids
+            import json as _json
+
+            data = _json.loads(raw)
+            if isinstance(data, dict):
+                data = [data]
+            for item in data or []:
+                cmd = str(item.get("CommandLine") or "").replace("\\", "/").lower()
+                pid = int(item.get("ProcessId") or 0)
+                if pid > 0 and ("sing-box" in cmd) and (cfg in cmd or "config.json" in cmd):
+                    pids.append(pid)
+        else:
+            out = subprocess.run(
+                ["pgrep", "-af", "sing-box"],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            for line in (out.stdout or "").splitlines():
+                if "sing-box" not in line:
+                    continue
+                if str(config_path) not in line and "config.json" not in line:
+                    # still reclaim any sing-box run under our config dir
+                    if str(_config_dir()) not in line:
+                        continue
+                try:
+                    pid = int(line.split(None, 1)[0])
+                except Exception:
+                    continue
+                pids.append(pid)
+    except Exception as e:
+        print(f"[ProxyPool] process scan failed: {e}")
+    return pids
+
+
 class SingBoxProxyPool:
-    """Manage subscription nodes + one local sing-box process."""
+    """Manage subscription nodes + one local sing-box process (singleton lifecycle)."""
 
     def __init__(self) -> None:
         self._lock = threading.RLock()
@@ -430,6 +593,12 @@ class SingBoxProxyPool:
         self._binary = ""
         self._status = "stopped"
         self._last_error = ""
+        self._last_used = 0.0
+        # reclaim orphans left by previous process crash
+        try:
+            self.reclaim_all(reason="init")
+        except Exception as e:
+            print(f"[ProxyPool] init reclaim: {e}")
 
     def configure(self, settings: ProxyPoolSettings) -> None:
         with self._lock:
@@ -437,24 +606,29 @@ class SingBoxProxyPool:
             self._listen_port = self.settings.listen_port
 
     def proxy_url(self) -> Optional[str]:
-        """SOCKS5 URL for httpx if running."""
+        """HTTP mixed inbound URL for httpx if running."""
         with self._lock:
             if not self.settings.enabled or self._status != "running":
                 return None
-            return f"socks5://127.0.0.1:{self._listen_port}"
+            return f"http://127.0.0.1:{self._listen_port}"
 
     def status(self) -> dict:
         with self._lock:
+            pid = None
+            if self._proc and self._proc.poll() is None:
+                pid = self._proc.pid
             return {
                 "enabled": self.settings.enabled,
                 "status": self._status,
                 "listen_port": self._listen_port,
                 "proxy_url": self.proxy_url(),
+                "pid": pid,
                 "node_count": len(self.nodes),
                 "selected": self._selected_tag or "",
                 "binary": self._binary,
                 "last_error": self._last_error,
                 "last_fetch": self._last_fetch,
+                "last_used": self._last_used,
                 "sub_configured": bool(self.settings.sub_url),
                 "nodes": [
                     {"name": n.name, "server": n.server, "port": n.port, "tag": n.tag()}
@@ -480,23 +654,87 @@ class SingBoxProxyPool:
         self._config_path.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
         return self._config_path
 
-    def _stop_proc(self) -> None:
-        proc = self._proc
-        self._proc = None
-        if not proc:
-            return
+    def _write_pid(self, pid: int) -> None:
         try:
-            proc.terminate()
-            try:
-                proc.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                proc.kill()
+            _pid_file().write_text(str(pid), encoding="utf-8")
+        except Exception as e:
+            print(f"[ProxyPool] write pid file failed: {e}")
+
+    def _read_pid_file(self) -> Optional[int]:
+        try:
+            p = _pid_file()
+            if not p.exists():
+                return None
+            return int(p.read_text(encoding="utf-8").strip())
         except Exception:
+            return None
+
+    def _clear_pid_file(self) -> None:
+        try:
+            _pid_file().unlink(missing_ok=True)
+        except Exception:
+            pass
+
+    def reclaim_all(self, *, reason: str = "", ports: Optional[List[int]] = None) -> dict:
+        """Kill tracked process, pid-file process, port holders, and orphan sing-box."""
+        killed: List[int] = []
+        with self._lock:
+            port = self._listen_port
+            cfg = self._config_path
+            proc = self._proc
+            self._proc = None
+
+        # 1) managed Popen
+        if proc is not None:
+            pid = proc.pid
             try:
-                proc.kill()
+                proc.terminate()
+                try:
+                    proc.wait(timeout=4)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                    proc.wait(timeout=3)
             except Exception:
-                pass
-        self._status = "stopped"
+                _kill_pid(pid, force=True)
+            killed.append(pid)
+
+        # 2) pid file
+        fpid = self._read_pid_file()
+        if fpid and _pid_alive(fpid):
+            _kill_pid(fpid, force=False)
+            time.sleep(0.3)
+            if _pid_alive(fpid):
+                _kill_pid(fpid, force=True)
+            killed.append(fpid)
+        self._clear_pid_file()
+
+        # 3) anything listening on our ports (mixed + clash api)
+        scan_ports = ports or [port, port + 1]
+        for p in scan_ports:
+            for pid in _pids_listening_on_port(p):
+                if pid not in killed:
+                    _kill_pid(pid, force=True)
+                    killed.append(pid)
+
+        # 4) orphans matching our config
+        for pid in _pids_matching_singbox_config(cfg):
+            if pid not in killed and _pid_alive(pid):
+                _kill_pid(pid, force=True)
+                killed.append(pid)
+
+        # brief wait for OS to release ports
+        time.sleep(0.4)
+        with self._lock:
+            self._status = "stopped"
+            self._last_error = ""
+        uniq = sorted(set(killed))
+        if uniq:
+            print(f"[ProxyPool] reclaimed pids={uniq} reason={reason or '-'}")
+        return {"killed": uniq, "reason": reason}
+
+    def _stop_proc(self) -> None:
+        """Stop managed instance and reclaim leftovers."""
+        self.reclaim_all(reason="stop")
 
     async def start(self) -> dict:
         s = self.settings.normalized()
@@ -511,27 +749,42 @@ class SingBoxProxyPool:
             self._last_error = str(e)
             raise
         self._binary = await ensure_singbox(s.singbox_path)
+
+        # Always reclaim before spawn — never leave multiple sing-box copies
+        self.reclaim_all(reason="before-start", ports=[s.listen_port, s.listen_port + 1])
         self._listen_port = _free_port(s.listen_port)
-        # pick initial node
+
         with self._lock:
             if self.nodes:
                 self._selected_tag = random.choice(self.nodes).tag()
         self._write_config(self._selected_tag)
-        self._stop_proc()
+
         try:
+            # new session so we can kill the process group on Unix
+            kwargs: Dict[str, Any] = {
+                "stdout": subprocess.DEVNULL,
+                "stderr": subprocess.PIPE,
+                "cwd": str(_config_dir()),
+            }
+            if platform.system().lower() != "windows":
+                kwargs["start_new_session"] = True  # own process group
+            else:
+                kwargs["creationflags"] = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+
             self._proc = subprocess.Popen(
                 [self._binary, "run", "-c", str(self._config_path)],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.PIPE,
-                cwd=str(_config_dir()),
+                **kwargs,
             )
         except Exception as e:
             self._status = "error"
             self._last_error = f"启动 sing-box 失败: {e}"
+            self.reclaim_all(reason="start-failed")
             raise ProxyPoolError(self._last_error)
-        # wait for port
+
+        self._write_pid(self._proc.pid)
+
         ok = False
-        for _ in range(30):
+        for _ in range(40):
             if self._proc.poll() is not None:
                 err = ""
                 try:
@@ -540,27 +793,35 @@ class SingBoxProxyPool:
                     pass
                 self._status = "error"
                 self._last_error = f"sing-box 退出: {err or self._proc.returncode}"
+                self.reclaim_all(reason="start-exit")
                 raise ProxyPoolError(self._last_error)
             try:
                 with socket.create_connection(("127.0.0.1", self._listen_port), timeout=0.3):
                     ok = True
                     break
             except OSError:
-                await asyncio.sleep(0.2)
+                await asyncio.sleep(0.15)
         if not ok:
-            self._stop_proc()
-            self._status = "error"
             self._last_error = "sing-box 端口未就绪"
+            self.reclaim_all(reason="port-timeout")
+            self._status = "error"
             raise ProxyPoolError(self._last_error)
         self._status = "running"
         self._last_error = ""
+        self._last_used = time.time()
+        print(f"[ProxyPool] started pid={self._proc.pid} port={self._listen_port}")
         return self.status()
 
     def stop(self) -> dict:
+        """Public stop + full reclaim."""
         with self._lock:
-            self._stop_proc()
+            self.reclaim_all(reason="user-stop")
             self._status = "stopped"
         return self.status()
+
+    def shutdown(self) -> dict:
+        """App shutdown hook — must not leave orphan sing-box."""
+        return self.reclaim_all(reason="app-shutdown")
 
     def _pick_random_node(self, exclude: Optional[set] = None) -> VlessNode:
         exclude = exclude or set()
@@ -610,21 +871,32 @@ class SingBoxProxyPool:
 
         if not switched:
             self._write_config(tag)
-            self._stop_proc()
+            # full reclaim then single new instance (no multi-copy)
+            self.reclaim_all(reason="select-restart", ports=[self._listen_port, self._listen_port + 1])
             binary = self._binary or await ensure_singbox(self.settings.singbox_path)
             self._binary = binary
+            kwargs: Dict[str, Any] = {
+                "stdout": subprocess.DEVNULL,
+                "stderr": subprocess.DEVNULL,
+                "cwd": str(_config_dir()),
+            }
+            if platform.system().lower() != "windows":
+                kwargs["start_new_session"] = True
+            else:
+                kwargs["creationflags"] = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
             self._proc = subprocess.Popen(
                 [binary, "run", "-c", str(self._config_path)],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                cwd=str(_config_dir()),
+                **kwargs,
             )
+            self._write_pid(self._proc.pid)
             ok = await self._wait_local_port(8.0)
             self._status = "running" if ok else "error"
             if not ok:
                 self._last_error = "切换节点后 sing-box 未就绪"
+                self.reclaim_all(reason="select-port-fail")
                 return False
         print(f"[ProxyPool] selected {name} ({tag})")
+        self._last_used = time.time()
         return True
 
     async def rotate(self) -> dict:
@@ -728,6 +1000,7 @@ class SingBoxProxyPool:
             if ok:
                 print(f"[ProxyPool] register acquire ok node={node.name} detail={detail}")
                 self._attempt += 1
+                self._last_used = time.time()
                 # prefer http:// for httpx (mixed inbound)
                 return http_proxy
             last_err = detail
@@ -740,3 +1013,15 @@ class SingBoxProxyPool:
 
 # global singleton
 proxy_pool = SingBoxProxyPool()
+
+
+def _atexit_cleanup() -> None:
+    try:
+        proxy_pool.shutdown()
+    except Exception as e:
+        print(f"[ProxyPool] atexit cleanup: {e}")
+
+
+import atexit as _atexit
+
+_atexit.register(_atexit_cleanup)

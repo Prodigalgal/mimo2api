@@ -39,6 +39,31 @@ async def startup_discover_models():
         _anthropic_os.path.join(_anthropic_os.path.dirname(_anthropic_os.path.abspath(__file__)), ".anthropic_batches"),
     ))
     """服务启动时预探测模型，避免首次请求返回3个硬编码模型"""
+    # Reclaim any orphan sing-box left by previous pod/process
+    try:
+        from app.proxy_pool import proxy_pool
+        from app.config import config_manager
+        from app.proxy_pool import ProxyPoolSettings
+
+        cfg = config_manager.get_proxy_pool_settings()
+        proxy_pool.configure(
+            ProxyPoolSettings(
+                enabled=cfg.enabled,
+                sub_url=cfg.sub_url,
+                listen_port=cfg.listen_port,
+                singbox_path=cfg.singbox_path,
+                rotate_every=cfg.rotate_every,
+                refresh_interval=cfg.refresh_interval,
+                connect_retries=getattr(cfg, "connect_retries", 5),
+                fetch_sub_each_time=getattr(cfg, "fetch_sub_each_time", True),
+            )
+        )
+        reclaimed = proxy_pool.reclaim_all(reason="app-startup")
+        if reclaimed.get("killed"):
+            print(f"[启动] 已回收残留 sing-box: {reclaimed['killed']}")
+    except Exception as e:
+        print(f"[启动] 代理进程回收跳过: {e}")
+
     try:
         await _do_discover()
         print("✅ 模型预探测完成")
@@ -53,6 +78,18 @@ async def startup_discover_models():
     # 账号自动续期（邮箱+密码 / passToken）
     print("[启动] 账号自动续期线程...")
     threading.Thread(target=_auto_renew_loop, daemon=True).start()
+
+
+@app.on_event("shutdown")
+async def shutdown_cleanup():
+    """Stop sing-box so no orphan processes remain after pod exit."""
+    try:
+        from app.proxy_pool import proxy_pool
+
+        st = proxy_pool.shutdown()
+        print(f"[关闭] sing-box 资源回收: {st}")
+    except Exception as e:
+        print(f"[关闭] 代理回收失败: {e}")
 
 
 def _cleanup_old_sessions():

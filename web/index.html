@@ -475,12 +475,11 @@
                     </label>
                     <div class="btn-group">
                         <button class="btn-primary" onclick="saveProxyPool()">保存配置</button>
-                        <button class="btn-outline" onclick="proxyAction('refresh')">刷新节点</button>
-                        <button class="btn-success" onclick="proxyAction('start')">启动</button>
-                        <button class="btn-outline" onclick="proxyAction('rotate')">轮换节点</button>
-                        <button class="btn-outline" onclick="proxyAction('test')">连通测试</button>
-                        <button class="btn-danger" onclick="proxyAction('stop')">停止</button>
+                        <button class="btn-success" onclick="proxyAction('test')">连通测试</button>
+                        <button class="btn-outline" onclick="proxyAction('refresh')">刷新节点列表</button>
                         <button class="btn-outline" onclick="loadProxyPool()">刷新状态</button>
+                        <button class="btn-danger" onclick="proxyAction('reclaim')">回收进程</button>
+                        <button class="btn-outline" onclick="proxyAction('stop')">停止</button>
                     </div>
                     <div id="pxResult"></div>
                     <div id="pxStatus" style="margin-top:10px;font-size:12px;color:var(--text-muted)"></div>
@@ -843,9 +842,10 @@ let cfg = { api_keys: '', mimo_accounts: [] }, parsed = null;
             }).join('<br>');
             el.innerHTML =
                 '<div><b>状态:</b> ' + (st.status || '-') +
+                (st.pid ? ' · <b>pid:</b> ' + st.pid : '') +
                 ' · <b>节点:</b> ' + (st.node_count || 0) +
                 ' · <b>当前:</b> ' + (st.selected || '-') +
-                ' · <b>代理:</b> <code>' + (st.proxy_url || '未运行') + '</code></div>' +
+                ' · <b>代理:</b> <code>' + (st.proxy_url || '未运行（注册时自动拉起）') + '</code></div>' +
                 (st.binary ? '<div style="margin-top:4px"><b>sing-box:</b> <code>' + st.binary + '</code></div>' : '') +
                 (st.last_error ? '<div style="color:#f87171;margin-top:4px">' + st.last_error + '</div>' : '') +
                 (nodes ? '<div style="margin-top:8px">' + nodes + '</div>' : '');
@@ -889,6 +889,7 @@ let cfg = { api_keys: '', mimo_accounts: [] }, parsed = null;
                 refresh: '/api/proxy-pool/refresh',
                 rotate: '/api/proxy-pool/rotate',
                 test: '/api/proxy-pool/test',
+                reclaim: '/api/proxy-pool/reclaim',
             };
             const url = map[act];
             if (!url) return;
