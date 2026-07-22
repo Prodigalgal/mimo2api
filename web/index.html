@@ -608,14 +608,34 @@ let cfg = { api_keys: '', mimo_accounts: [] }, parsed = null;
             return j;
         }
 
-        function formatBatchResults(j) {
-            const lines = (j.results || []).map(function (x, i) {
-                const ok = x.logged_in || x.saved_ok || x.registered;
-                return (ok ? '✅' : '❌') + ' #' + (x.attempt || (i + 1)) +
-                    ' ' + (x.email || x.user_id || x.error || '') +
-                    (x.region ? ' · ' + x.region : '');
-            }).join('<br>');
-            return (j.message || '') + (lines ? '<br>' + lines : '');
+        function formatBatchSummary(j) {
+            // 仅汇总，不列出具体邮箱/密码
+            const success = j.success != null ? j.success : 0;
+            const failed = j.failed != null ? j.failed : 0;
+            const total = j.total != null ? j.total : ((j.results || []).length || (success + failed));
+            const maxA = j.max_attempts != null ? j.max_attempts : total;
+            const target = j.success_target != null ? j.success_target : 0;
+            const status = j.status || (j.ok === false ? 'error' : 'done');
+            const parts = [];
+            if (status === 'running') {
+                parts.push('批量注册进行中…');
+            } else if (status === 'cancelled') {
+                parts.push('批量注册已停止');
+            } else if (status === 'error') {
+                parts.push('批量注册异常结束');
+            } else {
+                parts.push(success > 0 ? '✅ 批量注册完成' : '批量注册结束');
+            }
+            parts.push(
+                '成功 <b>' + success + '</b>' +
+                (target > 0 ? ' / 目标 ' + target : '') +
+                ' · 失败 <b>' + failed + '</b>' +
+                ' · 尝试 <b>' + total + '</b> / 上限 ' + maxA
+            );
+            if (j.stopped_early) parts.push('已达成功目标，提前结束');
+            if (j.concurrent) parts.push('并发 ' + j.concurrent + (j.concurrent_interval != null ? ' · 间隔 ' + j.concurrent_interval + 's' : ''));
+            if (j.error) parts.push('错误: ' + j.error);
+            return parts.join('<br>');
         }
 
         function _fmtLogTime(ts) {
@@ -626,30 +646,20 @@ let cfg = { api_keys: '', mimo_accounts: [] }, parsed = null;
         }
 
         function renderBatchProgress(st) {
-            // summary
             const running = st.status === 'running';
-            const type = st.status === 'error' ? 'err' : (running ? 'info' : (st.ok === false ? 'err' : 'ok'));
-            let summary = (st.message || '') +
-                (st.job_id ? '<br>job: <code>' + st.job_id + '</code>' : '') +
-                '<br>成功 ' + (st.success || 0) +
-                (st.success_target ? '/' + st.success_target : '') +
-                ' · 已尝试 ' + (st.total || 0) + '/' + (st.max_attempts || '?') +
-                (st.status ? ' · 状态 ' + st.status : '');
-            if ((st.results || []).length) {
-                summary += '<br>' + formatBatchResults(st).replace(st.message || '', '').replace(/^<br>/, '');
-            }
-            showStatus('regResult', type, summary);
+            const type = st.status === 'error' ? 'err' : (running ? 'info' : (st.ok === false && !(st.success > 0) ? 'err' : 'ok'));
+            // 结果区只显示汇总；明细放在下方日志（进行中可看阶段，不含密码）
+            showStatus('regResult', type, formatBatchSummary(st));
 
-            // slots
+            // slots：进行中显示阶段；结束后隐藏，避免罗列成功账号
             const slotsEl = $id('regSlots');
             if (slotsEl) {
                 const slots = st.slots || [];
-                if (slots.length) {
+                if (running && slots.length) {
                     slotsEl.style.display = 'flex';
                     slotsEl.innerHTML = slots.map(function (s) {
                         return '<div class="reg-slot' + (s.active ? ' active' : '') + '">' +
                             '<b>#' + (s.attempt || '-') + '</b> ' +
-                            (s.email ? '<code>' + s.email + '</code> ' : '') +
                             '<span style="color:#a78bfa">[' + (s.stage || '') + ']</span> ' +
                             (s.message || '') +
                             '</div>';
@@ -660,32 +670,33 @@ let cfg = { api_keys: '', mimo_accounts: [] }, parsed = null;
                 }
             }
 
-            // logs (newest at bottom, auto scroll)
+            // logs：进行中展示过程；结束后默认折叠清空展示（仍可点清理）
             const box = $id('regLogBox');
             if (box) {
                 const logs = st.logs || [];
-                if (logs.length) {
+                if (running && logs.length) {
                     box.style.display = 'block';
                     box.innerHTML = logs.map(function (L) {
                         const cls = (L.stage === 'error' || L.stage === 'cancelled') ? ' log-err' :
-                            (L.stage === 'done' || L.stage === 'job' && (L.message || '').indexOf('完成') >= 0 ? ' log-done' : '');
+                            (L.stage === 'done' || (L.stage === 'job' && (L.message || '').indexOf('完成') >= 0) ? ' log-done' : '');
+                        // 日志不展示密码；邮箱可作过程标识
                         return '<div class="log-line' + cls + '">' +
                             '<span class="log-ts">' + _fmtLogTime(L.ts) + '</span>' +
                             (L.attempt ? '<span class="log-attempt">#' + L.attempt + '</span>' : '') +
-                            '<span class="log-stage">[' + (L.stage || '') + ']</span>' +
-                            (L.email ? '<span class="log-email">' + L.email + '</span>' : '') +
+                            '<span class="log-stage">[' + (L.stage || '') + ']</span> ' +
                             (L.message || '') +
                             '</div>';
                     }).join('');
                     box.scrollTop = box.scrollHeight;
                 } else if (!running) {
-                    // keep hidden if empty after clear
+                    // 完成后不堆叠成功明细
+                    box.style.display = 'none';
+                    box.innerHTML = '';
                 }
             }
 
-            // buttons
             if ($id('btn-reg-stop')) $id('btn-reg-stop').style.display = running ? 'inline-flex' : 'none';
-            if ($id('btn-reg-clear-log')) $id('btn-reg-clear-log').style.display = (st.logs && st.logs.length) || !running ? 'inline-flex' : (running ? 'inline-flex' : 'none');
+            if ($id('btn-reg-clear-log')) $id('btn-reg-clear-log').style.display = running ? 'inline-flex' : 'none';
             if ($id('btn-reg-batch')) $id('btn-reg-batch').disabled = running;
             if ($id('btn-reg-start')) $id('btn-reg-start').disabled = running;
         }
@@ -1178,13 +1189,13 @@ let cfg = { api_keys: '', mimo_accounts: [] }, parsed = null;
         }
 
         function formatRegSuccess(j) {
-            const uid = (j.saved && j.saved.user_id) || (j.tokens && j.tokens.user_id) || '';
-            const ocrInfo = j.captcha_auto
-                ? ('<br>OCR: <code>' + (j.captcha_ocr || '') + '</code> · 尝试 ' + ((j.captcha_attempts || []).length) + ' 次')
-                : '';
-            return '✅ 注册成功' + ocrInfo +
-                '<br>邮箱: <code>' + (j.email || '') + '</code><br>密码: <code>' + (j.password || _regPassword) + '</code><br>userId: ' + uid +
-                '<br>已保存账号并进入保活（passToken + 临时邮箱自动取码）';
+            // 单次注册也只显示汇总，不回显邮箱密码
+            const saved = j.saved && j.saved.ok;
+            const logged = !!j.logged_in;
+            return '✅ 注册完成<br>成功 1 · 失败 0' +
+                (logged ? ' · 已登录' : '') +
+                (saved ? ' · 已写入账号列表' : ' · 未保存') +
+                (j.captcha_auto ? ' · 验证码自动通过' : '');
         }
 
         function handleRegResponse(j) {
@@ -1192,30 +1203,16 @@ let cfg = { api_keys: '', mimo_accounts: [] }, parsed = null;
                 _regSessionId = j.session_id || _regSessionId;
                 _regPassword = j.password || _regPassword;
                 showRegCaptcha(j.captcha_image, j.email);
-                const tries = (j.captcha_attempts || []).map(function (a) {
-                    return (a.ocr || '?');
-                }).join(', ');
                 let msg = j.message || '请手动填写验证码';
-                if (j.captcha_auto_failed && tries) {
-                    msg += '<br>OCR 尝试: ' + tries;
-                }
-                if (j.ocr_available === false) {
-                    msg += '<br>（未安装 ddddocr：pip install ddddocr）';
-                }
                 showStatus('regResult', j.captcha_auto_failed ? 'err' : 'info', msg);
                 return;
             }
-            if (j.ok && (j.logged_in || (j.saved && j.saved.ok))) {
+            if (j.ok && (j.logged_in || (j.saved && j.saved.ok) || j.registered)) {
                 showStatus('regResult', 'ok', formatRegSuccess(j));
                 toast('注册成功');
                 _regSessionId = null;
                 hideRegCaptcha();
                 loadAccounts();
-                return;
-            }
-            if (j.ok && j.registered && !j.logged_in) {
-                showStatus('regResult', 'info',
-                    '注册成功但自动登录未完成<br>邮箱: <code>' + j.email + '</code><br>密码: <code>' + j.password + '</code><br>' + (j.message || ''));
                 return;
             }
             showStatus('regResult', 'err', j.error || j.message || '注册失败');
