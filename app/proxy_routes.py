@@ -30,7 +30,7 @@ def _apply_settings_from_config() -> None:
 @router.get("/config")
 async def get_proxy_config(username: str = Depends(verify_admin)):
     pp = config_manager.get_proxy_pool_settings()
-    return {"ok": True, "proxy_pool": pp.to_dict(mask=True), "runtime": proxy_pool.status()}
+    return {"ok": True, "proxy_pool": pp.to_dict(mask=False), "runtime": proxy_pool.status()}
 
 
 @router.post("/config")
@@ -52,7 +52,7 @@ async def save_proxy_config(request: Request, username: str = Depends(verify_adm
             pass
     return {
         "ok": True,
-        "proxy_pool": pp.to_dict(mask=True),
+        "proxy_pool": pp.to_dict(mask=False),
         "runtime": proxy_pool.status(),
         "message": "代理池配置已保存",
     }

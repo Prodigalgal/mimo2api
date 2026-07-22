@@ -60,6 +60,21 @@
             box-shadow: 0 0 0 3px rgba(99,102,241,0.2);
         }
         input::placeholder, textarea::placeholder { color: var(--text-muted); }
+
+        .secret-wrap {
+            position: relative; display: flex; align-items: center;
+        }
+        .secret-wrap input {
+            padding-right: 44px;
+        }
+        .eye-btn {
+            position: absolute; right: 8px; top: 50%; transform: translateY(-50%);
+            border: none; background: transparent; color: var(--text-muted);
+            cursor: pointer; padding: 4px 8px; font-size: 16px; line-height: 1;
+            border-radius: 6px;
+        }
+        .eye-btn:hover { color: var(--text); background: rgba(148,163,184,0.12); }
+
         textarea {
             height: 140px; font-family: 'SF Mono', Monaco, monospace;
             font-size: 12px; resize: vertical;
@@ -273,8 +288,7 @@
 
                 <!-- Cookie 手动输入 -->
                 <div id="panel-cookie" class="tab-panel">
-                    <div class="status info">从浏览器 Cookie 中获取以下三个值：<br>F12 → Application → Cookies → aistudio.xiaomimimo.com<br>或直接粘贴整段 Cookie 字符串（用 ; 分隔），点"解析填充"自动拆分</div>
-                    <textarea id="c-raw" placeholder="粘贴整段 Cookie，如: serviceToken=&quot;xxx&quot;; userId=123; xiaomichatbot_ph=&quot;yyy&quot;" style="height:60px"></textarea>
+<textarea id="c-raw" placeholder="粘贴整段 Cookie，如: serviceToken=&quot;xxx&quot;; userId=123; xiaomichatbot_ph=&quot;yyy&quot;" style="height:60px"></textarea>
                     <button class="btn-outline" style="width:100%;margin-bottom:8px" onclick="parseCookieStr()">解析填充 ↓</button>
                     <div class="field"><label>serviceToken</label><input type="text" id="c-st" placeholder="粘贴 serviceToken"></div>
                     <div class="field"><label>userId</label><input type="text" id="c-uid" placeholder="粘贴 userId"></div>
@@ -284,11 +298,8 @@
 
                 <!-- 谷歌邮箱+密码导入（纯 API） -->
                 <div id="panel-email" class="tab-panel">
-                    <div class="status info">使用小米账号绑定的谷歌邮箱+密码，纯 API 登录导入。<br>
-                        若触发安全验证：<b>不会自动发验证码</b>，需你点击「发送验证码」后再填写。<br>
-                        自动续期仅用 passToken，不会走密码、也不会发 mail code。</div>
-                    <div class="field"><label>邮箱（Google / Xiaomi）</label><input type="email" id="e-email" placeholder="you@gmail.com"></div>
-                    <div class="field"><label>密码</label><input type="password" id="e-pass" placeholder="小米账号密码"></div>
+<div class="field"><label>邮箱（Google / Xiaomi）</label><input type="email" id="e-email" placeholder="you@gmail.com"></div>
+                    <div class="field"><label>密码</label><div class="secret-wrap"><input type="password" id="e-pass" placeholder="小米账号密码"><button type="button" class="eye-btn" data-eye-for="e-pass" onclick="toggleSecret('e-pass', this)" title="显示/隐藏">👁</button></div></div>
                     <div class="field" id="e-otp-wrap" style="display:none">
                         <label>邮箱验证码</label>
                         <input type="text" id="e-otp" placeholder="6 位验证码" maxlength="8">
@@ -310,10 +321,7 @@
 
                 <!-- 自动注册 -->
                 <div id="panel-register" class="tab-panel">
-                    <div class="status info">使用「临时邮箱」页配置的 API 自动注册小米账号。<br>
-                        图片验证码默认 <b>ddddocr</b>。批量：后台异步执行 + 进度轮询（避免网关 504），成功达到目标数即停。地区选 <b>RANDOM</b> 时每个账号独立随机（不含中国）。<br>
-                        本页参数可用「保存注册参数」写入 config，下次自动加载。</div>
-                    <div class="field"><label>注册地区（勿选 CN；批量时 RANDOM 每个账号独立随机）</label>
+<div class="field"><label>注册地区（勿选 CN；批量时 RANDOM 每个账号独立随机）</label>
                         <select id="reg-region" style="width:100%;padding:12px 16px;background:var(--bg-input);border:1px solid var(--border);border-radius:10px;color:var(--text)">
                             <option value="RANDOM" selected>🎲 随机（非中国）</option>
                             <option value="US">United States (US)</option>
@@ -386,16 +394,14 @@
 
                 <!-- 临时邮箱配置（仅邮箱服务，不含注册参数） -->
                 <div id="panel-tempmail" class="tab-panel">
-                    <div class="status info">对接 <a href="https://github.com/dreamhunter2333/cloudflare_temp_email" target="_blank" style="color:var(--primary)">cloudflare_temp_email</a> 自建实例。<br>
-                        只需 API 地址与管理口令。<b>邮箱域名自动从服务端获取</b>，无需手填。注册参数在「自动注册」页。</div>
-                    <div class="field"><label>API 地址</label>
-                        <input type="url" id="tm-api" placeholder="https://apimail.example.com">
+<div class="field"><label>API 地址</label>
+                        <div class="secret-wrap"><input type="password" id="tm-api" placeholder="https://apimail.example.com" autocomplete="off"><button type="button" class="eye-btn" data-eye-for="tm-api" onclick="toggleSecret('tm-api', this)" title="显示">👁</button></div>
                     </div>
                     <div class="field"><label>管理口令 (x-admin-auth)</label>
-                        <input type="password" id="tm-admin" placeholder="ADMIN_PASSWORDS 中的口令" autocomplete="off">
+                        <div class="secret-wrap"><input type="password" id="tm-admin" placeholder="ADMIN_PASSWORDS 中的口令" autocomplete="off"><button type="button" class="eye-btn" data-eye-for="tm-admin" onclick="toggleSecret('tm-admin', this)" title="显示/隐藏">👁</button></div>
                     </div>
                     <div class="field"><label>站点密码 x-custom-auth（可选）</label>
-                        <input type="password" id="tm-site" placeholder="若部署启用了站点密码则填写" autocomplete="off">
+                        <div class="secret-wrap"><input type="password" id="tm-site" placeholder="若部署启用了站点密码则填写" autocomplete="off"><button type="button" class="eye-btn" data-eye-for="tm-site" onclick="toggleSecret('tm-site', this)" title="显示/隐藏">👁</button></div>
                     </div>
                     <div class="field"><label>可用域名（自动检测，只读）</label>
                         <div id="tm-domains" style="font-size:12px;color:var(--text-muted);padding:8px 0">保存/测试后显示</div>
@@ -406,8 +412,7 @@
                     </div>
                     <div id="tmResult"></div>
                     <div style="margin:20px 0 8px;font-size:13px;font-weight:600;color:var(--text-muted)">AI 辅助识图（图片字符码）</div>
-                    <div class="status info" style="margin-top:0">ddddocr 失败时调用视觉模型。滑块/九宫格/reCAPTCHA 会识别类型并提示，暂不自动解。</div>
-                    <label class="toggle-row" style="margin:8px 0 12px">
+<label class="toggle-row" style="margin:8px 0 12px">
                         <span class="toggle-label">启用 AI 识图验证码</span>
                         <label class="switch">
                             <input type="checkbox" id="cai-enabled">
@@ -415,10 +420,10 @@
                         </label>
                     </label>
                     <div class="field"><label>API Base（OpenAI 兼容）</label>
-                        <input type="url" id="cai-base" placeholder="https://sub2api.example.com">
+                        <div class="secret-wrap"><input type="password" id="cai-base" placeholder="https://sub2api.example.com" autocomplete="off"><button type="button" class="eye-btn" data-eye-for="cai-base" onclick="toggleSecret('cai-base', this)" title="显示">👁</button></div>
                     </div>
                     <div class="field"><label>API Key</label>
-                        <input type="password" id="cai-key" placeholder="sk-..." autocomplete="off">
+                        <div class="secret-wrap"><input type="password" id="cai-key" placeholder="sk-..." autocomplete="off"><button type="button" class="eye-btn" data-eye-for="cai-key" onclick="toggleSecret('cai-key', this)" title="显示/隐藏">👁</button></div>
                     </div>
                     <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
                         <div class="field"><label>模型</label>
@@ -437,9 +442,7 @@
 
                 <!-- VLESS 代理池 (sing-box) -->
                 <div id="panel-proxy" class="tab-panel">
-                    <div class="status info">订阅拉取 VLESS 节点，本机启动 <b>sing-box</b> 混合入站（HTTP/SOCKS），自动注册走代理出口。<br>
-                        未安装 sing-box 时会尝试下载到项目 <code>.bin/</code>。也可手动指定可执行文件路径。</div>
-                    <label class="toggle-row" style="margin:8px 0 12px">
+<label class="toggle-row" style="margin:8px 0 12px">
                         <span class="toggle-label">启用代理池（注册时走代理）</span>
                         <label class="switch">
                             <input type="checkbox" id="px-enabled">
@@ -447,7 +450,7 @@
                         </label>
                     </label>
                     <div class="field"><label>订阅 URL（base64 VLESS）</label>
-                        <input type="text" id="px-sub" placeholder="https://proxy.example.com/sub?token=...">
+                        <div class="secret-wrap"><input type="password" id="px-sub" placeholder="https://proxy.example.com/sub?token=..." autocomplete="off"><button type="button" class="eye-btn" data-eye-for="px-sub" onclick="toggleSecret('px-sub', this)" title="显示">👁</button></div>
                     </div>
                     <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
                         <div class="field"><label>本地入站端口</label>
@@ -499,11 +502,11 @@
                 <div id="panel-apikey" class="tab-panel">
                     <div class="field">
                         <label>多个 Key 用逗号分隔</label>
-                        <input type="text" id="apiKeys" placeholder="sk-key1, sk-key2, sk-key3">
+                        <div class="secret-wrap"><input type="password" id="apiKeys" placeholder="sk-key1, sk-key2, sk-key3" autocomplete="off"><button type="button" class="eye-btn" data-eye-for="apiKeys" onclick="toggleSecret('apiKeys', this)" title="显示">👁</button></div>
                     </div>
                     <div class="field" style="margin-top:12px">
                         <label>管理员密码</label>
-                        <input type="password" id="adminPassword" placeholder="默认 admin，修改后刷新需重新登录">
+                        <div class="secret-wrap"><input type="password" id="adminPassword" placeholder="默认 admin，修改后刷新需重新登录"><button type="button" class="eye-btn" data-eye-for="adminPassword" onclick="toggleSecret('adminPassword', this)" title="显示/隐藏">👁</button></div>
                     </div>
                     <div class="field" style="margin-top:16px">
                         <label class="toggle-row">
@@ -552,6 +555,20 @@ let cfg = { api_keys: '', mimo_accounts: [] }, parsed = null;
 
         // === 工具函数 ===
         function $id(id) { return document.getElementById(id); }
+
+        function toggleSecret(id, btn) {
+            var el = $id(id);
+            if (!el) return;
+            if (el.type === 'password') {
+                el.type = 'text';
+                if (btn) { btn.textContent = '🙈'; btn.title = '隐藏'; }
+            } else {
+                el.type = 'password';
+                if (btn) { btn.textContent = '👁'; btn.title = '显示'; }
+            }
+        }
+
+
         function toast(msg, err) {
             const t = $id('toast');
             t.textContent = msg; t.className = 'toast show ' + (err ? 'toast-err' : 'toast-ok');
@@ -797,12 +814,7 @@ let cfg = { api_keys: '', mimo_accounts: [] }, parsed = null;
         function applyProxyForm(pp) {
             if (!pp) return;
             if ($id('px-enabled')) $id('px-enabled').checked = !!pp.enabled;
-            if ($id('px-sub') && pp.sub_url && String(pp.sub_url).indexOf('***') === -1) {
-                $id('px-sub').value = pp.sub_url;
-            } else if ($id('px-sub') && pp.sub_url) {
-                // masked: keep existing input if user already typed
-                if (!$id('px-sub').value) $id('px-sub').placeholder = pp.sub_url;
-            }
+            if ($id('px-sub') && pp.sub_url != null) $id('px-sub').value = pp.sub_url || '';
             if ($id('px-port')) $id('px-port').value = pp.listen_port || 17890;
             if ($id('px-retries')) $id('px-retries').value = pp.connect_retries != null ? pp.connect_retries : 5;
             if ($id('px-refresh')) $id('px-refresh').value = pp.refresh_interval != null ? pp.refresh_interval : 3600;
@@ -942,13 +954,9 @@ let cfg = { api_keys: '', mimo_accounts: [] }, parsed = null;
 
         function applyTempMailForm(tm, domains) {
             if (!tm) return;
-            if ($id('tm-api')) $id('tm-api').value = tm.api_base || '';
-            if ($id('tm-admin') && tm.admin_password && tm.admin_password.indexOf('***') === -1) {
-                $id('tm-admin').value = tm.admin_password;
-            }
-            if ($id('tm-site') && tm.site_password && tm.site_password.indexOf('***') === -1) {
-                $id('tm-site').value = tm.site_password;
-            }
+            if ($id('tm-api') && tm.api_base != null) $id('tm-api').value = tm.api_base || '';
+            if ($id('tm-admin') && tm.admin_password != null) $id('tm-admin').value = tm.admin_password || '';
+            if ($id('tm-site') && tm.site_password != null) $id('tm-site').value = tm.site_password || '';
             if (domains) renderTmDomains(domains);
             applyRegFormFromTm(tm);
         }
@@ -973,10 +981,8 @@ let cfg = { api_keys: '', mimo_accounts: [] }, parsed = null;
         function applyCaptchaAIForm(ca) {
             if (!ca) return;
             if ($id('cai-enabled')) $id('cai-enabled').checked = !!ca.enabled;
-            if ($id('cai-base')) $id('cai-base').value = ca.api_base || '';
-            if ($id('cai-key') && ca.api_key && String(ca.api_key).indexOf('***') === -1) {
-                $id('cai-key').value = ca.api_key;
-            }
+            if ($id('cai-base') && ca.api_base != null) $id('cai-base').value = ca.api_base || '';
+            if ($id('cai-key') && ca.api_key != null) $id('cai-key').value = ca.api_key || '';
             if ($id('cai-model')) $id('cai-model').value = ca.model || 'grok';
             if ($id('cai-timeout')) $id('cai-timeout').value = ca.timeout || 60;
         }

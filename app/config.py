@@ -227,15 +227,16 @@ class Config:
         if self.captcha_ai is None:
             self.captcha_ai = CaptchaAISettings()
 
-    def to_dict(self):
+    def to_dict(self, mask_secrets: bool = False):
+        """Admin UI: mask_secrets=False so secrets can be shown with eye toggle."""
         d = {
             "api_keys": self.api_keys,
             "admin_password": self.admin_password,
             "mimo_accounts": [acc.to_dict() for acc in self.mimo_accounts],
             "tools_passthrough": self.tools_passthrough,
-            "temp_mail": self.temp_mail.to_dict(mask=True) if self.temp_mail else TempMailSettings().to_dict(),
-            "proxy_pool": self.proxy_pool.to_dict(mask=True) if self.proxy_pool else ProxyPoolConfig().to_dict(),
-            "captcha_ai": self.captcha_ai.to_dict(mask=True) if self.captcha_ai else CaptchaAISettings().to_dict(),
+            "temp_mail": self.temp_mail.to_dict(mask=mask_secrets) if self.temp_mail else TempMailSettings().to_dict(mask=mask_secrets),
+            "proxy_pool": self.proxy_pool.to_dict(mask=mask_secrets) if self.proxy_pool else ProxyPoolConfig().to_dict(mask=mask_secrets),
+            "captcha_ai": self.captcha_ai.to_dict(mask=mask_secrets) if self.captcha_ai else CaptchaAISettings().to_dict(mask=mask_secrets),
         }
         if self.models:
             d["models"] = self.models
@@ -314,6 +315,10 @@ class ConfigManager:
     def load(self):
         """加载配置"""
         if not self.config_file.exists():
+            self.config = Config()
+            # still allow pure-env bootstrap
+            from .env_config import apply_env_overrides
+            apply_env_overrides(self.config)
             self.save()
             return
         try:
@@ -337,6 +342,9 @@ class ConfigManager:
             print(f"加载配置失败: {e}")
             self.config = Config()
             self.save()
+        # Env overrides (K8s secrets) always win
+        from .env_config import apply_env_overrides
+        apply_env_overrides(self.config)
 
     def save(self):
         """保存配置"""
@@ -586,9 +594,9 @@ class ConfigManager:
             self.save()
 
     def get_config(self) -> dict:
-        """获取配置"""
+        """获取配置（管理端明文回显，前端用小眼睛控制显隐）"""
         with self.lock:
-            return self.config.to_dict()
+            return self.config.to_dict(mask_secrets=False)
 
 
 # 全局配置管理器实例

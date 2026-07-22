@@ -26,7 +26,8 @@ def _mail_cfg_from_settings():
 @router.get("/api/temp-mail/config")
 async def get_temp_mail_config(username: str = Depends(verify_admin)):
     tm = config_manager.get_temp_mail_settings()
-    out = {"ok": True, "temp_mail": tm.to_dict(mask=True), "domains": []}
+    # admin UI: return secrets plain; eye-toggle on frontend
+    out = {"ok": True, "temp_mail": tm.to_dict(mask=False), "domains": []}
     # auto-list domains for UI (user need not type domain)
     try:
         from .temp_mail import TempMailConfig, list_domains
@@ -74,7 +75,7 @@ async def save_temp_mail_config(request: Request, username: str = Depends(verify
         pass
     return {
         "ok": True,
-        "temp_mail": tm.to_dict(mask=True),
+        "temp_mail": tm.to_dict(mask=False),
         "domains": domains,
         "message": "临时邮箱配置已保存（域名由服务端自动获取）",
     }
@@ -83,7 +84,7 @@ async def save_temp_mail_config(request: Request, username: str = Depends(verify
 @router.get("/api/captcha-ai/config")
 async def get_captcha_ai_config(username: str = Depends(verify_admin)):
     ca = config_manager.get_captcha_ai_settings()
-    return {"ok": True, "captcha_ai": ca.to_dict(mask=True)}
+    return {"ok": True, "captcha_ai": ca.to_dict(mask=False)}
 
 
 @router.post("/api/captcha-ai/config")
@@ -96,7 +97,7 @@ async def save_captcha_ai_config(request: Request, username: str = Depends(verif
         return {"ok": False, "error": "invalid body"}
     payload = data.get("captcha_ai") if isinstance(data.get("captcha_ai"), dict) else data
     ca = config_manager.update_captcha_ai(payload)
-    return {"ok": True, "captcha_ai": ca.to_dict(mask=True), "message": "AI 验证码配置已保存"}
+    return {"ok": True, "captcha_ai": ca.to_dict(mask=False), "message": "AI 验证码配置已保存"}
 
 
 @router.post("/api/captcha-ai/test")

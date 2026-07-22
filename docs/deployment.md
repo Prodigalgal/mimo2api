@@ -21,6 +21,52 @@ volume. The following environment variables select persistent file locations:
 - `MIMO2API_RESPONSES_FILE`
 - `MIMO2API_BATCH_DIR`
 - `MIMO2API_RENEW_INTERVAL_SECONDS` (default: `21600`)
+- `MIMO2API_DATA_DIR` (writable dir for sing-box binary/config; defaults to `/tmp/mimo2api` when root is read-only)
+
+### Secret / feature injection (env overrides config.json)
+
+Environment variables **override** values loaded from `config.json` at process start:
+
+| Env | Purpose |
+|-----|---------|
+| `MIMO2API_API_KEYS` | Comma-separated API keys |
+| `MIMO2API_ADMIN_PASSWORD` | Admin UI password |
+| `MIMO2API_TEMP_MAIL_API_BASE` | Temp-mail API base URL |
+| `MIMO2API_TEMP_MAIL_ADMIN_PASSWORD` | Temp-mail admin password (`x-admin-auth`) |
+| `MIMO2API_TEMP_MAIL_SITE_PASSWORD` | Optional site password |
+| `MIMO2API_TEMP_MAIL_DOMAIN` | Optional preferred domain (usually leave empty for auto) |
+| `MIMO2API_PROXY_ENABLED` | `true` / `false` |
+| `MIMO2API_PROXY_SUB_URL` | VLESS subscription URL |
+| `MIMO2API_PROXY_LISTEN_PORT` | Local sing-box mixed port |
+| `MIMO2API_PROXY_CONNECT_RETRIES` | Failover node attempts per register |
+| `MIMO2API_PROXY_FETCH_SUB_EACH_TIME` | Re-fetch sub each register |
+| `MIMO2API_CAPTCHA_AI_ENABLED` | `true` / `false` |
+| `MIMO2API_CAPTCHA_AI_API_BASE` | OpenAI-compatible vision API base |
+| `MIMO2API_CAPTCHA_AI_API_KEY` | Vision API key |
+| `MIMO2API_CAPTCHA_AI_MODEL` | Model id (e.g. `grok`) |
+| `MIMO2API_CAPTCHA_AI_TIMEOUT` | Seconds |
+
+Example (production):
+
+```yaml
+env:
+  - name: MIMO2API_TEMP_MAIL_API_BASE
+    value: "https://apimail.omnnu.xyz"
+  - name: MIMO2API_TEMP_MAIL_ADMIN_PASSWORD
+    valueFrom: { secretKeyRef: { name: mimo2api-secrets, key: temp-mail-admin } }
+  - name: MIMO2API_PROXY_ENABLED
+    value: "true"
+  - name: MIMO2API_PROXY_SUB_URL
+    valueFrom: { secretKeyRef: { name: mimo2api-secrets, key: proxy-sub-url } }
+  - name: MIMO2API_CAPTCHA_AI_ENABLED
+    value: "true"
+  - name: MIMO2API_CAPTCHA_AI_API_BASE
+    value: "https://sub2api.mnnu.eu.org"
+  - name: MIMO2API_CAPTCHA_AI_API_KEY
+    valueFrom: { secretKeyRef: { name: mimo2api-secrets, key: captcha-ai-key } }
+  - name: MIMO2API_CAPTCHA_AI_MODEL
+    value: "grok"
+```
 
 Never commit `config.json`, account tokens, login captures, or mail credentials.
 
