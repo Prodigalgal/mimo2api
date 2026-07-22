@@ -72,18 +72,32 @@ Never commit `config.json`, account tokens, login captures, or mail credentials.
 
 ## Oracle Kubernetes deployment
 
-The production GitOps overlay uses the `speedproxy/mimo2api` image and keeps
-application state in the `mimo2api-state` PVC. Its init container copies the
-bootstrap configuration only when the PVC has no configuration, so an image
-rollout does not overwrite accounts or runtime settings.
+The production GitOps overlay lives in **`Prodigalgal/ircs-prod-config`**
+under `mimo2api/`:
 
-The expected runtime contract is:
+| Path | Role |
+|------|------|
+| `mimo2api/base/deployment.yaml` | Pod env (paths + `secretKeyRef`) |
+| `mimo2api/base/secret-app-env.yaml` | Secret with URLs/keys (stringData) |
+| `mimo2api/base/kustomization.yaml` | Base resources |
+| `mimo2api/oracle/` | Image pin + HTTPRoute |
+
+Application state stays on PVC `mimo2api-state`. Init only bootstraps empty
+`config.json`; **secrets come from env** (`mimo2api-app-secrets`) and override
+the file via `app/env_config.py`.
+
+Runtime contract:
 
 - public endpoint: `https://mimo2api.mnnu.eu.org`
 - namespace: `mimo2api`
-- one replica with a `Recreate` rollout
-- read-only root filesystem with the state volume mounted at `/var/lib/mimo2api`
+- one replica, `Recreate`
+- read-only root FS; state at `/var/lib/mimo2api`; scratch at `/tmp` (`MIMO2API_DATA_DIR=/tmp/mimo2api`)
 
-For a release, update the GitOps image tag to the full SHA tag emitted by the
-workflow, then verify the Argo CD application, Deployment, PVC, HTTPRoute, and
-`/v1/models` endpoint.
+After changing secrets:
+
+```bash
+kubectl -n mimo2api apply -f mimo2api/base/secret-app-env.yaml
+kubectl -n mimo2api rollout restart deploy/mimo2api
+```
+
+CI updates the oracle image tag after each successful image build.
