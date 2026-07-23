@@ -10,6 +10,7 @@ MiMo2API 将小米 MiMo AI Studio 转换为 OpenAI-compatible API。当前版本
 - 工具调用：注入完整 JSON Schema，并在返回前使用 JSON Schema 校验参数
 - SQLite：账号、配置、Responses 状态、usage 和保活队列统一持久化
 - 账号保活：SQLite 租约、初始分散、低并发 worker、成功周期抖动、失败指数退避
+- 注册代理：镜像内置固定版本的 `sing-box`，VLESS 订阅在注册前加载并以单并发运行
 - 会话：`X-MiMo-Session-Id` / `session_id` / `user` 驱动的 SQLite 粘性路由，同一会话固定账号和 MiMo `conversationId`
 - 上下文：会话查询缓存带 TTL；累计 prompt tokens 达阈值后自动压缩上下文并轮换上游会话
 - 管理接口：账号、temp-mail、VLESS/sing-box 代理、用量、运行状态

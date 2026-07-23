@@ -9,6 +9,8 @@ COPY src ./src
 RUN npm run build && npm prune --omit=dev
 
 FROM node:24-trixie-slim
+ARG TARGETARCH
+ARG SING_BOX_VERSION=1.13.14
 ENV NODE_ENV=production \
     PORT=8080 \
     MIMO2API_DATA_DIR=/var/lib/mimo2api \
@@ -19,7 +21,16 @@ COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
 COPY package.json config.example.json ./
 COPY web ./web
-RUN groupadd --gid 10001 mimo2api \
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates curl \
+    && rm -rf /var/lib/apt/lists/* \
+    && case "$TARGETARCH" in amd64|arm64) ;; *) echo "unsupported sing-box architecture: $TARGETARCH" >&2; exit 1 ;; esac \
+    && curl -fsSL "https://github.com/SagerNet/sing-box/releases/download/v${SING_BOX_VERSION}/sing-box-${SING_BOX_VERSION}-linux-${TARGETARCH}-glibc.tar.gz" -o /tmp/sing-box.tar.gz \
+    && mkdir -p /tmp/sing-box \
+    && tar -xzf /tmp/sing-box.tar.gz -C /tmp/sing-box \
+    && install -m 0755 "$(find /tmp/sing-box -type f -name sing-box -print -quit)" /usr/local/bin/sing-box \
+    && rm -rf /tmp/sing-box /tmp/sing-box.tar.gz \
+    && groupadd --gid 10001 mimo2api \
     && useradd --uid 10001 --gid 10001 --no-create-home --home-dir /app --shell /usr/sbin/nologin mimo2api \
     && mkdir -p /var/lib/mimo2api \
     && chown -R 10001:10001 /app /var/lib/mimo2api
