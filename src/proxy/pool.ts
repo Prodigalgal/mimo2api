@@ -8,6 +8,7 @@ import type { ProxyPoolConfig } from "../config/types.js";
 import { ApiError } from "../core/errors.js";
 
 interface VlessNode {
+  identity: string;
   name: string;
   uuid: string;
   server: string;
@@ -38,7 +39,7 @@ export interface ProxyLease {
 
 export class ProxyPool {
   #nodes: VlessNode[] = [];
-  #usedNodeTags = new Set<string>();
+  #usedNodeIds = new Set<string>();
   #leases = new Map<string, ActiveLease>();
   #reservedPorts = new Set<number>();
   #lastError = "";
@@ -49,7 +50,7 @@ export class ProxyPool {
   async configure(config: ProxyPoolConfig): Promise<void> {
     if (config.sub_url !== this.config.sub_url) {
       this.#nodes = [];
-      this.#usedNodeTags.clear();
+      this.#usedNodeIds.clear();
     }
     this.config = config;
     if (!config.enabled) await this.close();
@@ -63,11 +64,12 @@ export class ProxyPool {
       signal,
     });
     if (!response.ok) throw new ApiError(502, "proxy_subscription_failed", `subscription returned HTTP ${response.status}`);
-    const nodes = decodeSubscription(await response.text()).map(parseVless).filter((node): node is VlessNode => Boolean(node));
+    const parsed = decodeSubscription(await response.text()).map(parseVless).filter((node): node is VlessNode => Boolean(node));
+    const nodes = [...new Map(parsed.map((node) => [node.identity, node])).values()];
     if (nodes.length === 0) throw new ApiError(400, "proxy_subscription_empty", "subscription contains no VLESS nodes");
     this.#nodes = nodes;
-    const currentTags = new Set(nodes.map((node) => node.tag));
-    for (const tag of this.#usedNodeTags) if (!currentTags.has(tag)) this.#usedNodeTags.delete(tag);
+    const currentIds = new Set(nodes.map((node) => node.identity));
+    for (const id of this.#usedNodeIds) if (!currentIds.has(id)) this.#usedNodeIds.delete(id);
     this.#lastFetch = Date.now();
     return nodes;
   }
@@ -77,7 +79,7 @@ export class ProxyPool {
     if (this.config.fetch_sub_each_time || this.#nodes.length === 0) await this.refresh(signal);
     if (this.#nodes.length === 0) throw new ApiError(502, "proxy_registration_unavailable", "proxy pool has no usable nodes");
 
-    const node = chooseProxyNode(this.#nodes, this.#usedNodeTags);
+    const node = chooseProxyNode(this.#nodes, this.#usedNodeIds);
     const id = randomUUID().replaceAll("-", "");
     const port = await this.#reservePort();
     const root = process.env.MIMO2API_DATA_DIR ?? ".";
@@ -178,7 +180,7 @@ export class ProxyPool {
       status: this.#leases.size > 0 ? "leased" : "idle",
       active_leases: this.#leases.size,
       node_count: this.#nodes.length,
-      used_in_cycle: this.#usedNodeTags.size,
+      used_in_cycle: this.#usedNodeIds.size,
       last_error: this.#lastError,
       last_fetch: this.#lastFetch,
       sub_configured: Boolean(this.config.sub_url),
@@ -196,14 +198,14 @@ export class ProxyPool {
   }
 }
 
-export const chooseProxyNode = <T extends { tag: string }>(nodes: T[], used: Set<string>, random = Math.random): T => {
-  let available = nodes.filter((node) => !used.has(node.tag));
+export const chooseProxyNode = <T extends { identity: string }>(nodes: T[], used: Set<string>, random = Math.random): T => {
+  let available = nodes.filter((node) => !used.has(node.identity));
   if (available.length === 0) {
     used.clear();
     available = [...nodes];
   }
   const selected = available[Math.min(available.length - 1, Math.floor(random() * available.length))]!;
-  used.add(selected.tag);
+  used.add(selected.identity);
   return selected;
 };
 
@@ -220,7 +222,14 @@ const parseVless = (value: string): VlessNode | undefined => {
     const url = new URL(value);
     const query = url.searchParams;
     const name = decodeURIComponent(url.hash.slice(1) || `${url.hostname}:${url.port || 443}`);
+    const identity = [
+      decodeURIComponent(url.username), url.hostname, url.port || "443",
+      query.get("security") || "tls", query.get("type") || query.get("network") || "tcp",
+      query.get("host") || "", decodeURIComponent(query.get("path") || "/"),
+      query.get("sni") || query.get("host") || url.hostname, query.get("flow") || "",
+    ].join("|");
     return {
+      identity,
       name,
       uuid: decodeURIComponent(url.username),
       server: url.hostname,
@@ -232,7 +241,7 @@ const parseVless = (value: string): VlessNode | undefined => {
       sni: query.get("sni") || query.get("host") || url.hostname,
       fingerprint: query.get("fp") || "chrome",
       flow: query.get("flow") || "",
-      tag: `vless-${Buffer.from(`${name}-${url.hostname}-${url.port}`).toString("base64url").slice(0, 30)}`,
+      tag: `vless-${Buffer.from(identity).toString("base64url").slice(0, 30)}`,
     };
   } catch { return undefined; }
 };

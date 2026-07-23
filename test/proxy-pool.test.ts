@@ -3,13 +3,17 @@ import { chooseProxyNode, decodeSubscription } from "../src/proxy/pool.js";
 
 describe("proxy pool", () => {
   it("uses every node once before beginning another cycle", () => {
-    const nodes = [{ tag: "a" }, { tag: "b" }, { tag: "c" }];
+    const nodes = [
+      { identity: "node-a", tag: "same" },
+      { identity: "node-b", tag: "same" },
+      { identity: "node-c", tag: "same" },
+    ];
     const used = new Set<string>();
 
-    expect(chooseProxyNode(nodes, used, () => 0).tag).toBe("a");
-    expect(chooseProxyNode(nodes, used, () => 0).tag).toBe("b");
-    expect(chooseProxyNode(nodes, used, () => 0).tag).toBe("c");
-    expect(chooseProxyNode(nodes, used, () => 0).tag).toBe("a");
+    expect(chooseProxyNode(nodes, used, () => 0).identity).toBe("node-a");
+    expect(chooseProxyNode(nodes, used, () => 0).identity).toBe("node-b");
+    expect(chooseProxyNode(nodes, used, () => 0).identity).toBe("node-c");
+    expect(chooseProxyNode(nodes, used, () => 0).identity).toBe("node-a");
   });
 
   it("decodes plain and base64 subscriptions", () => {
