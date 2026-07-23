@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.7
 
-FROM node:24-trixie-slim AS build
+FROM node:24-trixie AS build
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci
