@@ -37,6 +37,12 @@ describe("Fastify application", () => {
       expect(admin.payload).toContain('id="regLocalCaptchaRetries"');
       expect(admin.payload).toContain("['running','stopping']");
       expect(admin.payload).toContain("body:'{}'");
+      expect(admin.payload).toContain('onclick="testProxy()"');
+      expect(admin.payload).not.toContain('id="proxyPort"');
+      const adminHeaders = { authorization: `Basic ${Buffer.from("admin:admin-test").toString("base64")}` };
+      for (const endpoint of ["start", "stop", "rotate", "refresh", "reclaim"]) {
+        expect((await app.inject({ method: "POST", url: `/api/proxy-pool/${endpoint}`, headers: adminHeaders })).statusCode).toBe(404);
+      }
       expect((await app.inject({ method: "GET", url: "/vendor/lucide/lucide.min.js" })).statusCode).toBe(200);
     } finally {
       await app.close();

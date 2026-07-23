@@ -43,13 +43,9 @@ export const TempMailSchema = z.object({
 export const ProxyPoolSchema = z.object({
   enabled: booleanish.default(false),
   sub_url: z.string().default(""),
-  listen_port: z.coerce.number().int().min(1024).max(65535).default(17890),
   singbox_path: z.string().default(""),
-  rotate_every: z.coerce.number().int().min(1).max(100).default(1),
-  refresh_interval: z.coerce.number().int().min(0).max(604800).default(3600),
-  connect_retries: z.coerce.number().int().min(1).max(20).default(5),
   fetch_sub_each_time: booleanish.default(true),
-}).passthrough();
+});
 
 export const CaptchaAiSchema = z.object({
   enabled: booleanish.default(false),

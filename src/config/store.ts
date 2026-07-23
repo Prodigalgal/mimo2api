@@ -115,8 +115,6 @@ export class ConfigStore {
         ...config.proxy_pool,
         enabled: envBoolean(process.env.MIMO2API_PROXY_ENABLED, config.proxy_pool.enabled),
         sub_url: envOverride(process.env.MIMO2API_PROXY_SUB_URL, config.proxy_pool.sub_url),
-        listen_port: envOverride(process.env.MIMO2API_PROXY_LISTEN_PORT, config.proxy_pool.listen_port),
-        connect_retries: envOverride(process.env.MIMO2API_PROXY_CONNECT_RETRIES, config.proxy_pool.connect_retries),
         fetch_sub_each_time: envBoolean(
           process.env.MIMO2API_PROXY_FETCH_SUB_EACH_TIME,
           config.proxy_pool.fetch_sub_each_time,

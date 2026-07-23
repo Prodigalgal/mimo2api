@@ -34,6 +34,8 @@ interface Session {
   captchaImage: string;
   captchaContentType: string;
   proxyUrl?: string;
+  proxyLeaseId?: string;
+  expiryTimer?: NodeJS.Timeout;
   ticketSent: boolean;
 }
 
@@ -111,12 +113,13 @@ export class RegistrationService {
   }
 
   async begin(input: RegistrationRequest, signal: AbortSignal): Promise<object> {
-    this.#pruneSessions();
+    await this.#pruneSessions();
     const settings = this.settings(input);
     const password = settings.password || randomPassword();
     const mail = new TempMailClient(this.config.snapshot().temp_mail);
     const address = await mail.createAddress(signal);
     const encrypted = encryptCredentials(address.address, password);
+    const lease = await this.proxy.acquireForRegistration(signal);
     const session: Session = {
       id: randomUUID().replaceAll("-", ""),
       email: address.address,
@@ -131,12 +134,20 @@ export class RegistrationService {
       createdAt: Date.now(),
       captchaImage: "",
       captchaContentType: "image/jpeg",
-      proxyUrl: await this.proxy.prepareForRegistration(signal),
+      proxyUrl: lease?.url,
+      proxyLeaseId: lease?.id,
       ticketSent: false,
     };
-    await this.#refreshCaptcha(session, signal);
-    this.#sessions.set(session.id, session);
-    return sessionPublic(session);
+    try {
+      await this.#refreshCaptcha(session, signal);
+      this.#sessions.set(session.id, session);
+      session.expiryTimer = setTimeout(() => void this.#disposeSession(session).catch(() => undefined), 30 * 60_000);
+      session.expiryTimer.unref();
+      return sessionPublic(session);
+    } catch (error) {
+      await this.#disposeSession(session);
+      throw error;
+    }
   }
 
   async refresh(sessionId: string, signal: AbortSignal): Promise<object> {
@@ -157,6 +168,7 @@ export class RegistrationService {
         await this.#refreshCaptcha(session, signal);
         return { ...sessionPublic(session), ok: false, need_captcha: true, error: "图片验证码错误，请重试", captcha_type: "image_code" };
       }
+      await this.#disposeSession(session);
       throw passportError(ticket, "sending registration email failed");
     }
     session.ticketSent = true;
@@ -217,14 +229,14 @@ export class RegistrationService {
     return this.jobPublic(job);
   }
 
-  stop(): void {
+  async stop(): Promise<void> {
     for (const job of this.#jobs.values()) {
       if (job.status === "running") {
         job.status = "stopping";
         job.controller.abort(new DOMException("Service stopping", "AbortError"));
       }
     }
-    this.#sessions.clear();
+    await Promise.allSettled([...this.#sessions.values()].map((session) => this.#disposeSession(session)));
   }
 
   private async runBatch(job: RegistrationJob, settings: Settings): Promise<void> {
@@ -282,40 +294,44 @@ export class RegistrationService {
   private async autoAttempt(settings: Settings, signal: AbortSignal, onProgress: Progress): Promise<Completion> {
     const started = await this.begin({ region: settings.region, domain: settings.domain, password: settings.password }, signal) as ReturnType<typeof sessionPublic>;
     const session = this.session(started.session_id);
-    const captchaConfig = this.config.snapshot().captcha_ai;
-    for (let attempt = 1; attempt <= settings.captchaRetries; attempt += 1) {
-      const localOnly = !shouldUseAiFallback(attempt, settings.localCaptchaRetries);
-      onProgress(
-        "captcha_ocr",
-        `本地 OCR 识别图片验证码（本地优先 ${Math.min(attempt, settings.localCaptchaRetries)}/${settings.localCaptchaRetries}，总计 ${attempt}/${settings.captchaRetries}）`,
-        session.email,
-      );
-      const localCandidates = await solveCaptchaLocally(session.captchaImage, signal);
-      const localResult = await this.#tryCaptchaCandidates(
-        session,
-        localCandidates,
-        settings.otpTimeout,
-        signal,
-        onProgress,
-      );
-      if (localResult) return localResult;
-
-      if (!localOnly) {
-        onProgress("captcha_ai", "多轮本地 OCR 未通过，使用 OpenAI-compatible 视觉模型兜底", session.email);
-        const aiResult = await this.#tryCaptchaCandidates(
+    try {
+      const captchaConfig = this.config.snapshot().captcha_ai;
+      for (let attempt = 1; attempt <= settings.captchaRetries; attempt += 1) {
+        const localOnly = !shouldUseAiFallback(attempt, settings.localCaptchaRetries);
+        onProgress(
+          "captcha_ocr",
+          `本地 OCR 识别图片验证码（本地优先 ${Math.min(attempt, settings.localCaptchaRetries)}/${settings.localCaptchaRetries}，总计 ${attempt}/${settings.captchaRetries}）`,
+          session.email,
+        );
+        const localCandidates = await solveCaptchaLocally(session.captchaImage, signal);
+        const localResult = await this.#tryCaptchaCandidates(
           session,
-          captchaCandidates([await solveCaptchaWithAi(session.captchaImage, captchaConfig, signal)]),
+          localCandidates,
           settings.otpTimeout,
           signal,
           onProgress,
         );
-        if (aiResult) return aiResult;
-      }
+        if (localResult) return localResult;
 
-      await this.#refreshCaptcha(session, signal);
-      onProgress("captcha", localOnly ? "本地 OCR 候选未通过，已刷新图片继续本地识别" : "验证码候选均不匹配，已刷新图片", session.email);
+        if (!localOnly) {
+          onProgress("captcha_ai", "多轮本地 OCR 未通过，使用 OpenAI-compatible 视觉模型兜底", session.email);
+          const aiResult = await this.#tryCaptchaCandidates(
+            session,
+            captchaCandidates([await solveCaptchaWithAi(session.captchaImage, captchaConfig, signal)]),
+            settings.otpTimeout,
+            signal,
+            onProgress,
+          );
+          if (aiResult) return aiResult;
+        }
+
+        await this.#refreshCaptcha(session, signal);
+        onProgress("captcha", localOnly ? "本地 OCR 候选未通过，已刷新图片继续本地识别" : "验证码候选均不匹配，已刷新图片", session.email);
+      }
+      throw new ApiError(422, "captcha_retry_exhausted", "image captcha retries exhausted");
+    } finally {
+      await this.#disposeSession(session);
     }
-    throw new ApiError(422, "captcha_retry_exhausted", "image captcha retries exhausted");
   }
 
   async #tryCaptchaCandidates(
@@ -366,55 +382,57 @@ export class RegistrationService {
   }
 
   async #finish(session: Session, input: RegistrationRequest, signal: AbortSignal, onProgress?: Progress): Promise<object> {
-    const mail = new TempMailClient(this.config.snapshot().temp_mail);
-    const seen = new Set<string>();
-    try { for (const item of await mail.listMails(session.mailJwt, signal)) seen.add(String(item.id ?? item.message_id ?? "")); } catch { /* new code can still be read */ }
-    const timeout = clamp(input.otp_timeout, 30, 600, this.config.snapshot().temp_mail.otp_timeout) * 1_000;
-    const code = await mail.waitForCode(session.mailJwt, { signal, timeoutMs: timeout, seenIds: seen, onPoll: () => onProgress?.("mail", "等待注册验证码邮件", session.email) });
-    onProgress?.("verify", "收到注册邮箱验证码，正在校验", session.email);
-    const verified = await this.requestJson(session, `${ACCOUNT}/pass/verifyEmailRegTicket`, {
-      method: "POST",
-      headers: this.headers(session, registrationHeaders(session.eui)),
-      body: form({
-        ticket: code,
+    try {
+      const mail = new TempMailClient(this.config.snapshot().temp_mail);
+      const seen = new Set<string>();
+      try { for (const item of await mail.listMails(session.mailJwt, signal)) seen.add(String(item.id ?? item.message_id ?? "")); } catch { /* new code can still be read */ }
+      const timeout = clamp(input.otp_timeout, 30, 600, this.config.snapshot().temp_mail.otp_timeout) * 1_000;
+      const code = await mail.waitForCode(session.mailJwt, { signal, timeoutMs: timeout, seenIds: seen, onPoll: () => onProgress?.("mail", "等待注册验证码邮件", session.email) });
+      onProgress?.("verify", "收到注册邮箱验证码，正在校验", session.email);
+      const verified = await this.requestJson(session, `${ACCOUNT}/pass/verifyEmailRegTicket`, {
+        method: "POST",
+        headers: this.headers(session, registrationHeaders(session.eui)),
+        body: form({
+          ticket: code,
+          region: session.region,
+          email: session.encryptedEmail,
+          env: "web",
+          qs: "%3Fsid%3Dxiaomichatbot%26_json%3Dtrue",
+          isAcceptLicense: "true",
+          sid: SID,
+          password: session.encryptedPassword,
+          policyName: "globalmiaccount",
+          callback: `${AISTUDIO}/sts`,
+          deviceFingerprint: createHash("md5").update(`${session.deviceId}-${Date.now()}`).digest("hex"),
+          _json: "true",
+        }),
+      }, signal);
+      const verifyCode = numberCode(verified.code);
+      if (verifyCode !== 0 && verified.code !== undefined && verified.code !== "0") throw passportError(verified, "email verification failed");
+      const passToken = String(verified.passToken ?? session.cookies.get("passToken") ?? "");
+      const userId = String(verified.userId ?? session.cookies.get("userId") ?? "");
+      const cUserId = String(verified.cUserId ?? session.cookies.get("cUserId") ?? "");
+      if (!passToken) {
+        return { ok: true, registered: true, saved: false, email: session.email, message: "账号已注册，但未获得 passToken，未写入账号池" };
+      }
+      onProgress?.("login", "正在换取 MiMo 服务凭据", session.email);
+      const account = await this.#renewer.renew(MimoAccountSchema.parse({
+        email: session.email,
+        password: session.password,
+        pass_token: passToken,
+        user_id: userId,
+        c_user_id: cUserId,
+        device_id: session.deviceId,
+        mail_jwt: session.mailJwt,
         region: session.region,
-        email: session.encryptedEmail,
-        env: "web",
-        qs: "%3Fsid%3Dxiaomichatbot%26_json%3Dtrue",
-        isAcceptLicense: "true",
-        sid: SID,
-        password: session.encryptedPassword,
-        policyName: "globalmiaccount",
-        callback: `${AISTUDIO}/sts`,
-        deviceFingerprint: createHash("md5").update(`${session.deviceId}-${Date.now()}`).digest("hex"),
-        _json: "true",
-      }),
-    }, signal);
-    const verifyCode = numberCode(verified.code);
-    if (verifyCode !== 0 && verified.code !== undefined && verified.code !== "0") throw passportError(verified, "email verification failed");
-    const passToken = String(verified.passToken ?? session.cookies.get("passToken") ?? "");
-    const userId = String(verified.userId ?? session.cookies.get("userId") ?? "");
-    const cUserId = String(verified.cUserId ?? session.cookies.get("cUserId") ?? "");
-    if (!passToken) {
-      this.#sessions.delete(session.id);
-      return { ok: true, registered: true, saved: false, email: session.email, message: "账号已注册，但未获得 passToken，未写入账号池" };
+        auto_renew: true,
+      }), signal);
+      const checked = await this.validator.validate(account, signal);
+      const saved = await this.saveAccount(checked);
+      return { ok: true, registered: true, saved: !saved.duplicate, duplicate: saved.duplicate, email: checked.email, user_id: checked.user_id, region: checked.region };
+    } finally {
+      await this.#disposeSession(session);
     }
-    onProgress?.("login", "正在换取 MiMo 服务凭据", session.email);
-    const account = await this.#renewer.renew(MimoAccountSchema.parse({
-      email: session.email,
-      password: session.password,
-      pass_token: passToken,
-      user_id: userId,
-      c_user_id: cUserId,
-      device_id: session.deviceId,
-      mail_jwt: session.mailJwt,
-      region: session.region,
-      auto_renew: true,
-    }), signal);
-    const checked = await this.validator.validate(account, signal);
-    const saved = await this.saveAccount(checked);
-    this.#sessions.delete(session.id);
-    return { ok: true, registered: true, saved: !saved.duplicate, duplicate: saved.duplicate, email: checked.email, user_id: checked.user_id, region: checked.region };
   }
 
   private async saveAccount(account: MimoAccount): Promise<{ duplicate: boolean }> {
@@ -519,9 +537,20 @@ export class RegistrationService {
     };
   }
 
-  #pruneSessions(): void {
+  async #disposeSession(session: Session): Promise<void> {
+    this.#sessions.delete(session.id);
+    if (session.expiryTimer) clearTimeout(session.expiryTimer);
+    session.expiryTimer = undefined;
+    await this.proxy.release(session.proxyLeaseId);
+    session.proxyLeaseId = undefined;
+    session.proxyUrl = undefined;
+  }
+
+  async #pruneSessions(): Promise<void> {
     const cutoff = Date.now() - 30 * 60_000;
-    for (const [id, session] of this.#sessions) if (session.createdAt < cutoff) this.#sessions.delete(id);
+    await Promise.all([...this.#sessions.values()]
+      .filter((session) => session.createdAt < cutoff)
+      .map((session) => this.#disposeSession(session)));
   }
 }
 

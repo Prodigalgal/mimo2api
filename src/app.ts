@@ -88,8 +88,8 @@ export async function buildApp(options: BuildOptions = {}): Promise<FastifyInsta
   app.addHook("onClose", async () => {
     await renewals.stop();
     await responses.stop();
-    registrations.stop();
-    proxy.stop();
+    await registrations.stop();
+    await proxy.close();
     config.database.close();
   });
 

@@ -1,6 +1,8 @@
 import { spawn, type ChildProcess } from "node:child_process";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, rm, writeFile } from "node:fs/promises";
+import { createServer } from "node:net";
 import path from "node:path";
+import { randomUUID } from "node:crypto";
 import { fetch, ProxyAgent } from "undici";
 import type { ProxyPoolConfig } from "../config/types.js";
 import { ApiError } from "../core/errors.js";
@@ -20,18 +22,37 @@ interface VlessNode {
   tag: string;
 }
 
+interface ActiveLease {
+  id: string;
+  url: string;
+  port: number;
+  process: ChildProcess;
+  directory: string;
+  lastError: string;
+}
+
+export interface ProxyLease {
+  id: string;
+  url: string;
+}
+
 export class ProxyPool {
   #nodes: VlessNode[] = [];
-  #selected = 0;
-  #process?: ChildProcess;
+  #usedNodeTags = new Set<string>();
+  #leases = new Map<string, ActiveLease>();
+  #reservedPorts = new Set<number>();
   #lastError = "";
   #lastFetch = 0;
 
   constructor(private config: ProxyPoolConfig) {}
 
-  configure(config: ProxyPoolConfig): void {
+  async configure(config: ProxyPoolConfig): Promise<void> {
+    if (config.sub_url !== this.config.sub_url) {
+      this.#nodes = [];
+      this.#usedNodeTags.clear();
+    }
     this.config = config;
-    if (!config.enabled) this.stop();
+    if (!config.enabled) await this.close();
   }
 
   async refresh(signal: AbortSignal): Promise<VlessNode[]> {
@@ -42,80 +63,149 @@ export class ProxyPool {
       signal,
     });
     if (!response.ok) throw new ApiError(502, "proxy_subscription_failed", `subscription returned HTTP ${response.status}`);
-    this.#nodes = decodeSubscription(await response.text()).map(parseVless).filter((node): node is VlessNode => Boolean(node));
+    const nodes = decodeSubscription(await response.text()).map(parseVless).filter((node): node is VlessNode => Boolean(node));
+    if (nodes.length === 0) throw new ApiError(400, "proxy_subscription_empty", "subscription contains no VLESS nodes");
+    this.#nodes = nodes;
+    const currentTags = new Set(nodes.map((node) => node.tag));
+    for (const tag of this.#usedNodeTags) if (!currentTags.has(tag)) this.#usedNodeTags.delete(tag);
     this.#lastFetch = Date.now();
-    if (this.#nodes.length === 0) throw new ApiError(400, "proxy_subscription_empty", "subscription contains no VLESS nodes");
-    return this.#nodes;
+    return nodes;
   }
 
-  async start(signal: AbortSignal): Promise<object> {
-    if (!this.config.enabled) throw new ApiError(400, "proxy_disabled", "proxy pool is disabled");
-    if (this.#nodes.length === 0) await this.refresh(signal);
-    this.stop();
-    const root = process.env.MIMO2API_DATA_DIR ?? ".";
-    const directory = path.resolve(root, ".singbox");
-    await mkdir(directory, { recursive: true });
-    const configFile = path.join(directory, "config.json");
-    await writeFile(configFile, JSON.stringify(singBoxConfig(this.#nodes, this.config.listen_port, this.#selected), null, 2));
-    const binary = this.config.singbox_path || process.env.SING_BOX_PATH || "sing-box";
-    this.#process = spawn(binary, ["run", "-c", configFile], { stdio: ["ignore", "ignore", "pipe"], windowsHide: true });
-    const spawnError = new Promise<never>((_resolve, reject) => {
-      this.#process?.once("error", (error) => reject(new ApiError(502, "singbox_start_failed", error.message)));
-    });
-    this.#process.stderr?.on("data", (chunk) => { this.#lastError = String(chunk).slice(-500); });
-    await Promise.race([delay(1_000, signal), spawnError]);
-    if (this.#process.exitCode !== null) throw new ApiError(502, "singbox_start_failed", this.#lastError || "sing-box exited during startup");
-    return this.status();
-  }
-
-  stop(): object {
-    if (this.#process && this.#process.exitCode === null) this.#process.kill("SIGTERM");
-    this.#process = undefined;
-    return this.status();
-  }
-
-  async rotate(signal: AbortSignal): Promise<object> {
-    if (this.#nodes.length === 0) await this.refresh(signal);
-    this.#selected = (this.#selected + 1) % this.#nodes.length;
-    return this.start(signal);
-  }
-
-  async test(signal: AbortSignal): Promise<object> {
-    if (!this.#process || this.#process.exitCode !== null) await this.start(signal);
-    const proxyUrl = `http://127.0.0.1:${this.config.listen_port}`;
-    const response = await fetch("https://api.ipify.org?format=json", {
-      dispatcher: new ProxyAgent(proxyUrl),
-      signal,
-    });
-    return { ok: response.ok, proxy_url: proxyUrl, egress: (await response.text()).slice(0, 200), ...this.status() };
-  }
-
-  async prepareForRegistration(signal: AbortSignal): Promise<string | undefined> {
+  async acquireForRegistration(signal: AbortSignal): Promise<ProxyLease | undefined> {
     if (!this.config.enabled) return undefined;
     if (this.config.fetch_sub_each_time || this.#nodes.length === 0) await this.refresh(signal);
     if (this.#nodes.length === 0) throw new ApiError(502, "proxy_registration_unavailable", "proxy pool has no usable nodes");
-    this.#selected = Math.floor(Math.random() * this.#nodes.length);
-    await this.start(signal);
-    return `http://127.0.0.1:${this.config.listen_port}`;
+
+    const node = chooseProxyNode(this.#nodes, this.#usedNodeTags);
+    const id = randomUUID().replaceAll("-", "");
+    const port = await this.#reservePort();
+    const root = process.env.MIMO2API_DATA_DIR ?? ".";
+    const directory = path.resolve(root, ".singbox", id);
+    const configFile = path.join(directory, "config.json");
+    try {
+      await mkdir(directory, { recursive: true });
+      await writeFile(configFile, JSON.stringify(singBoxConfig(node, port), null, 2));
+    } catch (error) {
+      this.#reservedPorts.delete(port);
+      await rm(directory, { recursive: true, force: true });
+      throw error;
+    }
+
+    const binary = this.config.singbox_path || process.env.SING_BOX_PATH || "sing-box";
+    const child = spawn(binary, ["run", "-c", configFile], { stdio: ["ignore", "ignore", "pipe"], windowsHide: true });
+    const lease: ActiveLease = {
+      id,
+      url: `http://127.0.0.1:${port}`,
+      port,
+      process: child,
+      directory,
+      lastError: "",
+    };
+    this.#leases.set(id, lease);
+    child.stderr?.on("data", (chunk) => {
+      lease.lastError = String(chunk).slice(-500);
+      this.#lastError = lease.lastError;
+    });
+
+    try {
+      const spawnError = new Promise<never>((_resolve, reject) => {
+        child.once("error", (error) => reject(new ApiError(502, "singbox_start_failed", error.message)));
+      });
+      await Promise.race([delay(1_000, signal), spawnError]);
+      if (child.exitCode !== null) {
+        throw new ApiError(502, "singbox_start_failed", lease.lastError || "sing-box exited during startup");
+      }
+      return { id, url: lease.url };
+    } catch (error) {
+      await this.release(id);
+      throw error;
+    }
+  }
+
+  async release(id: string | undefined): Promise<void> {
+    if (!id) return;
+    const lease = this.#leases.get(id);
+    if (!lease) return;
+    this.#leases.delete(id);
+    try {
+      if (lease.process.exitCode === null && lease.process.signalCode === null) {
+        lease.process.kill("SIGTERM");
+        if (!await waitForExit(lease.process, 2_000)) {
+          lease.process.kill("SIGKILL");
+          await waitForExit(lease.process, 500);
+        }
+      }
+    } finally {
+      this.#reservedPorts.delete(lease.port);
+      try {
+        await rm(lease.directory, { recursive: true, force: true });
+      } catch (error) {
+        this.#lastError = `proxy lease cleanup failed: ${error instanceof Error ? error.message : String(error)}`;
+      }
+    }
+  }
+
+  async close(): Promise<void> {
+    await Promise.allSettled([...this.#leases.keys()].map((id) => this.release(id)));
+  }
+
+  async test(signal: AbortSignal): Promise<object> {
+    const lease = await this.acquireForRegistration(signal);
+    if (!lease) throw new ApiError(400, "proxy_disabled", "proxy pool is disabled");
+    let ok = false;
+    const dispatcher = new ProxyAgent(lease.url);
+    try {
+      const response = await fetch("https://api.ipify.org?format=json", {
+        dispatcher,
+        signal,
+      });
+      ok = response.ok;
+      await response.arrayBuffer();
+    } finally {
+      try {
+        await dispatcher.close();
+      } finally {
+        await this.release(lease.id);
+      }
+    }
+    return { ok, ...this.status() };
   }
 
   status(): Record<string, any> {
-    const running = Boolean(this.#process && this.#process.exitCode === null);
     return {
       enabled: this.config.enabled,
-      status: running ? "running" : "stopped",
-      listen_port: this.config.listen_port,
-      proxy_url: running ? `http://127.0.0.1:${this.config.listen_port}` : null,
-      pid: running ? this.#process?.pid : null,
+      status: this.#leases.size > 0 ? "leased" : "idle",
+      active_leases: this.#leases.size,
       node_count: this.#nodes.length,
-      selected: this.#nodes[this.#selected]?.tag ?? "",
+      used_in_cycle: this.#usedNodeTags.size,
       last_error: this.#lastError,
       last_fetch: this.#lastFetch,
       sub_configured: Boolean(this.config.sub_url),
-      nodes: this.#nodes.slice(0, 50).map(({ name, server, port, tag }) => ({ name, server, port, tag })),
     };
   }
+
+  async #reservePort(): Promise<number> {
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      const port = await availablePort();
+      if (this.#reservedPorts.has(port)) continue;
+      this.#reservedPorts.add(port);
+      return port;
+    }
+    throw new ApiError(503, "proxy_port_unavailable", "could not reserve a local proxy port");
+  }
 }
+
+export const chooseProxyNode = <T extends { tag: string }>(nodes: T[], used: Set<string>, random = Math.random): T => {
+  let available = nodes.filter((node) => !used.has(node.tag));
+  if (available.length === 0) {
+    used.clear();
+    available = [...nodes];
+  }
+  const selected = available[Math.min(available.length - 1, Math.floor(random() * available.length))]!;
+  used.add(selected.tag);
+  return selected;
+};
 
 export const decodeSubscription = (body: string): string[] => {
   const text = body.trim();
@@ -147,8 +237,10 @@ const parseVless = (value: string): VlessNode | undefined => {
   } catch { return undefined; }
 };
 
-const singBoxConfig = (nodes: VlessNode[], port: number, selected: number) => {
-  const outbounds = nodes.map((node) => ({
+const singBoxConfig = (node: VlessNode, port: number) => ({
+  log: { level: "warn", timestamp: true },
+  inbounds: [{ type: "mixed", tag: "mixed-in", listen: "127.0.0.1", listen_port: port }],
+  outbounds: [{
     type: "vless",
     tag: node.tag,
     server: node.server,
@@ -165,20 +257,36 @@ const singBoxConfig = (nodes: VlessNode[], port: number, selected: number) => {
     transport: node.network === "ws" ? {
       type: "ws", path: node.path, headers: node.host ? { Host: node.host } : undefined,
     } : undefined,
-  }));
-  return {
-    log: { level: "warn", timestamp: true },
-    inbounds: [{ type: "mixed", tag: "mixed-in", listen: "127.0.0.1", listen_port: port }],
-    outbounds: [
-      ...outbounds,
-      { type: "selector", tag: "select", outbounds: outbounds.map((item) => item.tag), default: outbounds[selected]?.tag },
-      { type: "direct", tag: "direct" },
-    ],
-    route: { final: "select" },
+  }],
+  route: { final: node.tag },
+});
+
+const availablePort = (): Promise<number> => new Promise((resolve, reject) => {
+  const server = createServer();
+  server.once("error", reject);
+  server.listen(0, "127.0.0.1", () => {
+    const address = server.address();
+    const port = typeof address === "object" && address ? address.port : 0;
+    server.close((error) => error ? reject(error) : resolve(port));
+  });
+});
+
+const waitForExit = (child: ChildProcess, ms: number): Promise<boolean> => new Promise((resolve) => {
+  if (child.exitCode !== null || child.signalCode !== null) return resolve(true);
+  const done = () => {
+    clearTimeout(timer);
+    resolve(true);
   };
-};
+  const timer = setTimeout(() => {
+    child.removeListener("exit", done);
+    resolve(false);
+  }, ms);
+  timer.unref();
+  child.once("exit", done);
+});
 
 const delay = (ms: number, signal: AbortSignal) => new Promise<void>((resolve, reject) => {
+  if (signal.aborted) return reject(signal.reason);
   const onAbort = () => { clearTimeout(timer); reject(signal.reason); };
   const timer = setTimeout(() => {
     signal.removeEventListener("abort", onAbort);

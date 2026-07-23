@@ -26,7 +26,7 @@ export const adminRoutes = (config: ConfigStore, services: AdminServices): Fasti
     const patch = (request.body ?? {}) as Partial<AppConfig>;
     if (!patch || typeof patch !== "object") throw new ApiError(400, "invalid_config", "invalid config body");
     const updated = await config.update(preserveMaskedSecrets(config.snapshot(), patch));
-    services.proxy.configure(updated.proxy_pool);
+    await services.proxy.configure(updated.proxy_pool);
     return { ok: true, config: config.publicView() };
   });
 
@@ -108,17 +108,10 @@ export const adminRoutes = (config: ConfigStore, services: AdminServices): Fasti
   app.post("/api/proxy-pool/config", async (request) => {
     const body = request.body as Record<string, any>;
     const updated = await config.update({ proxy_pool: body.proxy_pool ?? body });
-    services.proxy.configure(updated.proxy_pool);
+    await services.proxy.configure(updated.proxy_pool);
     return { ok: true, proxy_pool: updated.proxy_pool, runtime: services.proxy.status() };
   });
   app.get("/api/proxy-pool/status", async () => ({ ok: true, ...services.proxy.status() }));
-  app.post("/api/proxy-pool/refresh", async (request) => ({
-    ok: true, nodes: (await services.proxy.refresh(requestController(request).signal)).length, ...services.proxy.status(),
-  }));
-  app.post("/api/proxy-pool/start", async (request) => ({ ok: true, ...await services.proxy.start(requestController(request).signal) }));
-  app.post("/api/proxy-pool/stop", async () => ({ ok: true, ...services.proxy.stop() }));
-  app.post("/api/proxy-pool/reclaim", async () => ({ ok: true, ...services.proxy.stop() }));
-  app.post("/api/proxy-pool/rotate", async (request) => ({ ok: true, ...await services.proxy.rotate(requestController(request).signal) }));
   app.post("/api/proxy-pool/test", async (request) => services.proxy.test(requestController(request).signal));
 
   app.get("/api/usage", async () => services.usage.summary());
