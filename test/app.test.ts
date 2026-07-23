@@ -22,6 +22,7 @@ describe("Fastify application", () => {
         method: "GET", url: "/v1/models", headers: { authorization: "Bearer sk-test" },
       })).statusCode).toBe(200);
       expect((await app.inject({ method: "GET", url: "/" })).statusCode).toBe(401);
+      expect((await app.inject({ method: "GET", url: "/index.html" })).statusCode).toBe(401);
       expect((await app.inject({
         method: "GET",
         url: "/",

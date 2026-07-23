@@ -45,6 +45,7 @@ export async function buildApp(options: BuildOptions = {}): Promise<FastifyInsta
   await app.register(cors, { origin: true, credentials: true });
   await app.register(staticPlugin, {
     root: path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../web"),
+    prefix: "/assets/",
     decorateReply: true,
     wildcard: false,
     index: false,
@@ -77,6 +78,7 @@ export async function buildApp(options: BuildOptions = {}): Promise<FastifyInsta
   app.get("/favicon.ico", async (_request, reply) => reply.status(204).send());
   app.get("/", { preHandler: requireAdmin(config) }, async (_request, reply) => reply.sendFile("index.html"));
   app.get("/admin", { preHandler: requireAdmin(config) }, async (_request, reply) => reply.sendFile("index.html"));
+  app.get("/index.html", { preHandler: requireAdmin(config) }, async (_request, reply) => reply.sendFile("index.html"));
 
   await app.register(modelRoutes(config, models));
   await app.register(chatRoutes(config, completion));
