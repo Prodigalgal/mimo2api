@@ -61,7 +61,7 @@ const exchange = (serviceToken: string, ph: string): void => {
     .reply(302, "", {
       headers: {
         location: "https://aistudio.xiaomimimo.com/open-apis/done",
-        "set-cookie": [`serviceToken=${serviceToken}; Path=/`, `xiaomichatbot_ph=${ph}; Path=/`],
+        "set-cookie": [`xiaomichatbot_serviceToken=${serviceToken}; Path=/`, `xiaomichatbot_ph=${ph}; Path=/`],
       },
     });
 };

@@ -54,7 +54,7 @@ export class XiaomiTokenRenewer {
         signal,
       });
       collectCookies(response.headers, cookies);
-      serviceToken = cookies.get("serviceToken") ?? serviceToken;
+      serviceToken = cookies.get("serviceToken") ?? cookies.get(`${sid}_serviceToken`) ?? serviceToken;
       ph = cookies.get("xiaomichatbot_ph") ?? ph;
       userId = cookies.get("userId") ?? userId;
       passToken = cookies.get("passToken") ?? passToken;

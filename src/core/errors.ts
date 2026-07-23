@@ -24,6 +24,10 @@ export class ApiError extends Error {
 
 export const asApiError = (error: unknown): ApiError => {
   if (error instanceof ApiError) return error;
+  if (error instanceof Error && "statusCode" in error && Number.isInteger((error as Error & { statusCode?: number }).statusCode)) {
+    const status = (error as Error & { statusCode: number }).statusCode;
+    return new ApiError(status, String((error as Error & { code?: string }).code ?? "request_error").toLowerCase(), error.message);
+  }
   if (error instanceof Error && error.name === "AbortError") {
     return new ApiError(499, "request_cancelled", "request was cancelled");
   }
