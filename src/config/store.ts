@@ -3,9 +3,11 @@ import { AppConfigSchema, type AppConfig, type MimoAccount } from "./types.js";
 import { AppDatabase } from "../db/database.js";
 
 const envBoolean = (value: string | undefined, fallback: boolean): boolean => {
-  if (value === undefined) return fallback;
+  if (!value?.trim()) return fallback;
   return !["0", "false", "no", "off"].includes(value.trim().toLowerCase());
 };
+
+const envOverride = <T>(value: string | undefined, fallback: T): string | T => value?.trim() ? value : fallback;
 
 export class ConfigStore {
   readonly legacyFile: string;
@@ -92,21 +94,21 @@ export class ConfigStore {
   #applyEnvironment(config: AppConfig): AppConfig {
     return AppConfigSchema.parse({
       ...config,
-      api_keys: process.env.MIMO2API_API_KEYS ?? config.api_keys,
-      admin_password: process.env.MIMO2API_ADMIN_PASSWORD ?? config.admin_password,
+      api_keys: envOverride(process.env.MIMO2API_API_KEYS, config.api_keys),
+      admin_password: envOverride(process.env.MIMO2API_ADMIN_PASSWORD, config.admin_password),
       temp_mail: {
         ...config.temp_mail,
-        api_base: process.env.MIMO2API_TEMP_MAIL_API_BASE ?? config.temp_mail.api_base,
-        admin_password: process.env.MIMO2API_TEMP_MAIL_ADMIN_PASSWORD ?? config.temp_mail.admin_password,
-        site_password: process.env.MIMO2API_TEMP_MAIL_SITE_PASSWORD ?? config.temp_mail.site_password,
-        domain: process.env.MIMO2API_TEMP_MAIL_DOMAIN ?? config.temp_mail.domain,
+        api_base: envOverride(process.env.MIMO2API_TEMP_MAIL_API_BASE, config.temp_mail.api_base),
+        admin_password: envOverride(process.env.MIMO2API_TEMP_MAIL_ADMIN_PASSWORD, config.temp_mail.admin_password),
+        site_password: envOverride(process.env.MIMO2API_TEMP_MAIL_SITE_PASSWORD, config.temp_mail.site_password),
+        domain: envOverride(process.env.MIMO2API_TEMP_MAIL_DOMAIN, config.temp_mail.domain),
       },
       proxy_pool: {
         ...config.proxy_pool,
         enabled: envBoolean(process.env.MIMO2API_PROXY_ENABLED, config.proxy_pool.enabled),
-        sub_url: process.env.MIMO2API_PROXY_SUB_URL ?? config.proxy_pool.sub_url,
-        listen_port: process.env.MIMO2API_PROXY_LISTEN_PORT ?? config.proxy_pool.listen_port,
-        connect_retries: process.env.MIMO2API_PROXY_CONNECT_RETRIES ?? config.proxy_pool.connect_retries,
+        sub_url: envOverride(process.env.MIMO2API_PROXY_SUB_URL, config.proxy_pool.sub_url),
+        listen_port: envOverride(process.env.MIMO2API_PROXY_LISTEN_PORT, config.proxy_pool.listen_port),
+        connect_retries: envOverride(process.env.MIMO2API_PROXY_CONNECT_RETRIES, config.proxy_pool.connect_retries),
         fetch_sub_each_time: envBoolean(
           process.env.MIMO2API_PROXY_FETCH_SUB_EACH_TIME,
           config.proxy_pool.fetch_sub_each_time,

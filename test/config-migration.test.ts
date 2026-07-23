@@ -57,4 +57,30 @@ describe("legacy config migration", () => {
     expect(first?.account.user_id).toBe("u");
     expect(duplicate).toBeUndefined();
   });
+
+  it("does not let empty environment values hide migrated credentials", async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), "mimo2api-"));
+    const configFile = path.join(directory, "config.json");
+    const databaseFile = path.join(directory, "mimo.sqlite");
+    await writeFile(configFile, JSON.stringify({
+      api_keys: "sk-migrated",
+      proxy_pool: { enabled: true, sub_url: "https://proxy.example/sub" },
+    }));
+
+    const previousKeys = process.env.MIMO2API_API_KEYS;
+    const previousProxyEnabled = process.env.MIMO2API_PROXY_ENABLED;
+    process.env.MIMO2API_API_KEYS = "";
+    process.env.MIMO2API_PROXY_ENABLED = "";
+    try {
+      const store = await ConfigStore.open(configFile, databaseFile);
+      stores.push(store);
+      expect(store.snapshot().api_keys).toBe("sk-migrated");
+      expect(store.snapshot().proxy_pool.enabled).toBe(true);
+    } finally {
+      if (previousKeys === undefined) delete process.env.MIMO2API_API_KEYS;
+      else process.env.MIMO2API_API_KEYS = previousKeys;
+      if (previousProxyEnabled === undefined) delete process.env.MIMO2API_PROXY_ENABLED;
+      else process.env.MIMO2API_PROXY_ENABLED = previousProxyEnabled;
+    }
+  });
 });
