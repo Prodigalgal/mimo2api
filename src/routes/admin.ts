@@ -3,7 +3,6 @@ import type { ConfigStore } from "../config/store.js";
 import { MimoAccountSchema, type AppConfig } from "../config/types.js";
 import { requireAdmin } from "../core/auth.js";
 import { ApiError } from "../core/errors.js";
-import { MimoClient } from "../mimo/client.js";
 import type { ProxyPool } from "../proxy/pool.js";
 import type { RegistrationService, RegistrationRequest } from "../registration/service.js";
 import type { ResponseRepository } from "../responses/repository.js";
@@ -33,13 +32,7 @@ export const adminRoutes = (config: ConfigStore, services: AdminServices): Fasti
 
   app.get("/api/accounts", async () => ({ accounts: config.publicView().mimo_accounts }));
   app.post<{ Params: { index: string } }>("/api/accounts/:index/test", async (request) => {
-    const account = accountAt(config, request.params.index);
-    const client = new MimoClient(account);
-    let content = "";
-    for await (const event of client.stream({ query: "hi", model: "mimo-v2.5-pro", thinking: false }, AbortSignal.timeout(120_000))) {
-      if (event.type === "text") content += event.text;
-    }
-    return { ok: true, content: content.slice(0, 200) };
+    return services.renewals.validateIndex(parseIndex(request.params.index));
   });
   app.post<{ Params: { index: string } }>("/api/accounts/:index/renew", async (request) => (
     services.renewals.renewIndex(parseIndex(request.params.index))

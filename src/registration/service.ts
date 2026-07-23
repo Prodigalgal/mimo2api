@@ -1,6 +1,7 @@
 import { constants, createCipheriv, createHash, createPublicKey, publicEncrypt, randomUUID } from "node:crypto";
 import { fetch, ProxyAgent, type Headers, type RequestInit } from "undici";
 import { XiaomiTokenRenewer } from "../accounts/xiaomi-renewer.js";
+import { AccountValidator } from "../accounts/account-validator.js";
 import type { ConfigStore } from "../config/store.js";
 import { MimoAccountSchema, type CaptchaAiConfig, type MimoAccount } from "../config/types.js";
 import { ApiError } from "../core/errors.js";
@@ -91,7 +92,11 @@ export class RegistrationService {
   #jobs = new Map<string, RegistrationJob>();
   #renewer = new XiaomiTokenRenewer();
 
-  constructor(private readonly config: ConfigStore, private readonly proxy: ProxyPool) {}
+  constructor(
+    private readonly config: ConfigStore,
+    private readonly proxy: ProxyPool,
+    private readonly validator = new AccountValidator(),
+  ) {}
 
   status(): object {
     const captcha = this.config.snapshot().captcha_ai;
@@ -351,9 +356,10 @@ export class RegistrationService {
       region: session.region,
       auto_renew: true,
     }), signal);
-    const saved = await this.saveAccount(account);
+    const checked = await this.validator.validate(account, signal);
+    const saved = await this.saveAccount(checked);
     this.#sessions.delete(session.id);
-    return { ok: true, registered: true, saved: !saved.duplicate, duplicate: saved.duplicate, email: account.email, user_id: account.user_id, region: account.region };
+    return { ok: true, registered: true, saved: !saved.duplicate, duplicate: saved.duplicate, email: checked.email, user_id: checked.user_id, region: checked.region };
   }
 
   private async saveAccount(account: MimoAccount): Promise<{ duplicate: boolean }> {

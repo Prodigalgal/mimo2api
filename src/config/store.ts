@@ -51,7 +51,7 @@ export class ConfigStore {
 
   nextAccount(): MimoAccount | undefined {
     const accounts = this.#config.mimo_accounts.filter((account) => (
-      account.service_token && account.user_id && account.xiaomichatbot_ph
+      account.is_valid && account.service_token && account.user_id && account.xiaomichatbot_ph
     ));
     if (accounts.length === 0) return undefined;
     const account = accounts[this.#accountIndex % accounts.length];

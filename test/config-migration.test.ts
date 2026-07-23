@@ -83,4 +83,19 @@ describe("legacy config migration", () => {
       else process.env.MIMO2API_PROXY_ENABLED = previousProxyEnabled;
     }
   });
+
+  it("only rotates accounts that have passed validation", async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), "mimo2api-"));
+    const configFile = path.join(directory, "config.json");
+    const databaseFile = path.join(directory, "mimo.sqlite");
+    await writeFile(configFile, JSON.stringify({
+      mimo_accounts: [
+        { service_token: "invalid", user_id: "invalid", xiaomichatbot_ph: "ph", is_valid: false },
+        { service_token: "valid", user_id: "valid", xiaomichatbot_ph: "ph", is_valid: true },
+      ],
+    }));
+    const store = await ConfigStore.open(configFile, databaseFile);
+    stores.push(store);
+    expect(store.nextAccount()?.user_id).toBe("valid");
+  });
 });
