@@ -35,6 +35,7 @@ export const TempMailSchema = z.object({
   concurrent: z.coerce.number().int().min(1).max(20).default(2),
   concurrent_interval: z.coerce.number().min(0).max(300).default(3),
   captcha_retries: z.coerce.number().int().min(1).max(30).default(10),
+  local_captcha_retries: z.coerce.number().int().min(1).max(30).default(3),
   otp_timeout: z.coerce.number().int().min(30).max(600).default(120),
   auto_captcha: booleanish.default(true),
 }).passthrough();

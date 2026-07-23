@@ -113,7 +113,9 @@ Chat 使用 `image_url` / `file` content part；Responses 使用 `input_image` /
 
 ## 注册验证码
 
-生产部署使用同 Pod 的 Python `ddddocr` sidecar，本地 OCR 候选全部不匹配后，才调用已配置的 OpenAI-compatible 视觉模型（例如现有 `grok`）兜底。Node 主容器通过 `MIMO2API_CAPTCHA_OCR_URL=http://127.0.0.1:8090` 访问本地服务；OCR 模型及运行时不进入 Node 进程。
+生产部署使用同 Pod 的 Python `ddddocr` sidecar。每张图片会执行原图、灰度增强、对比度增强和多阈值识别；默认连续 3 轮只使用本地 OCR，仍未通过后才调用已配置的 OpenAI-compatible 视觉模型（例如现有 `grok`）兜底。Node 主容器通过 `MIMO2API_CAPTCHA_OCR_URL=http://127.0.0.1:8090` 访问本地服务；OCR 模型及运行时不进入 Node 进程。
+
+批次任务停止时会先进入 `stopping` 状态，取消当前 OCR、邮件轮询或网络请求，最终落为 `cancelled`。前端会持续轮询到取消完成。
 
 ## 验证
 

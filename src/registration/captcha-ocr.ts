@@ -18,6 +18,8 @@ export const captchaCandidates = (values: unknown[]): string[] => {
   return candidates;
 };
 
+export const shouldUseAiFallback = (attempt: number, localRetries: number): boolean => attempt >= localRetries;
+
 export const solveCaptchaLocally = async (dataUrl: string, signal: AbortSignal): Promise<string[]> => {
   const base = String(process.env.MIMO2API_CAPTCHA_OCR_URL ?? "").trim().replace(/\/$/, "");
   if (!base || !dataUrl) return [];

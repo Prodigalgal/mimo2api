@@ -7,7 +7,7 @@ import { MimoAccountSchema, type CaptchaAiConfig, type MimoAccount } from "../co
 import { ApiError } from "../core/errors.js";
 import type { ProxyPool } from "../proxy/pool.js";
 import { TempMailClient } from "../tempmail/client.js";
-import { captchaCandidates, solveCaptchaLocally } from "./captcha-ocr.js";
+import { captchaCandidates, shouldUseAiFallback, solveCaptchaLocally } from "./captcha-ocr.js";
 
 const ACCOUNT = "https://account.xiaomi.com";
 const AISTUDIO = "https://aistudio.xiaomimimo.com";
@@ -57,7 +57,7 @@ interface JobResult {
 
 interface RegistrationJob {
   id: string;
-  status: "running" | "done" | "cancelled" | "error";
+  status: "running" | "stopping" | "done" | "cancelled" | "error";
   controller: AbortController;
   startedAt: number;
   finishedAt?: number;
@@ -85,6 +85,7 @@ export interface RegistrationRequest {
   concurrent?: number;
   concurrent_interval?: number;
   captcha_retries?: number;
+  local_captcha_retries?: number;
   otp_timeout?: number;
 }
 
@@ -103,7 +104,7 @@ export class RegistrationService {
     const captcha = this.config.snapshot().captcha_ai;
     return {
       pending_sessions: this.#sessions.size,
-      active_jobs: [...this.#jobs.values()].filter((job) => job.status === "running").length,
+      active_jobs: [...this.#jobs.values()].filter((job) => ["running", "stopping"].includes(job.status)).length,
       captcha_ai_ready: captcha.enabled && Boolean(captcha.api_base && captcha.api_key),
       max_concurrency: maximumConcurrency(),
     };
@@ -169,7 +170,7 @@ export class RegistrationService {
     if (!(captcha.enabled && captcha.api_base && captcha.api_key)) {
       throw new ApiError(400, "captcha_ai_not_configured", "batch registration requires a configured image captcha AI service");
     }
-    const running = [...this.#jobs.values()].find((job) => job.status === "running");
+    const running = [...this.#jobs.values()].find((job) => ["running", "stopping"].includes(job.status));
     if (running) throw new ApiError(409, "registration_job_running", `registration job ${running.id} is already running`);
     const job: RegistrationJob = {
       id: randomUUID().replaceAll("-", ""),
@@ -208,6 +209,7 @@ export class RegistrationService {
     const job = this.#jobs.get(id);
     if (!job) throw new ApiError(404, "registration_job_not_found", "registration job not found");
     if (job.status === "running") {
+      job.status = "stopping";
       job.message = "正在停止，当前网络请求已取消";
       this.log(job, 0, "job", job.message);
       job.controller.abort(new DOMException("Registration stopped", "AbortError"));
@@ -217,7 +219,10 @@ export class RegistrationService {
 
   stop(): void {
     for (const job of this.#jobs.values()) {
-      if (job.status === "running") job.controller.abort(new DOMException("Service stopping", "AbortError"));
+      if (job.status === "running") {
+        job.status = "stopping";
+        job.controller.abort(new DOMException("Service stopping", "AbortError"));
+      }
     }
     this.#sessions.clear();
   }
@@ -226,17 +231,22 @@ export class RegistrationService {
     const workers = Array.from({ length: job.concurrency }, (_, index) => this.runWorker(job, settings, index));
     try {
       await Promise.all(workers);
-      if (job.controller.signal.aborted) job.status = "cancelled";
-      else job.status = "done";
+      job.status = job.controller.signal.aborted ? "cancelled" : "done";
       job.stoppedEarly = !job.controller.signal.aborted && job.target > 0 && job.success >= job.target && job.results.length < job.requested;
       job.message = job.status === "cancelled"
         ? `任务已停止：成功 ${job.success}，失败 ${job.failed}`
         : `任务完成：成功 ${job.success}，失败 ${job.failed}${job.stoppedEarly ? "，达到目标提前结束" : ""}`;
       this.log(job, 0, "job", job.message);
     } catch (error) {
-      job.status = "error";
-      job.message = `批量注册异常：${messageOf(error)}`;
-      this.log(job, 0, "error", job.message);
+      if (job.controller.signal.aborted) {
+        job.status = "cancelled";
+        job.message = `任务已停止：成功 ${job.success}，失败 ${job.failed}`;
+        this.log(job, 0, "job", job.message);
+      } else {
+        job.status = "error";
+        job.message = `批量注册异常：${messageOf(error)}`;
+        this.log(job, 0, "error", job.message);
+      }
     } finally {
       job.finishedAt = Date.now();
     }
@@ -274,28 +284,36 @@ export class RegistrationService {
     const session = this.session(started.session_id);
     const captchaConfig = this.config.snapshot().captcha_ai;
     for (let attempt = 1; attempt <= settings.captchaRetries; attempt += 1) {
-      onProgress("captcha_ocr", `本地 OCR 识别图片验证码（${attempt}/${settings.captchaRetries}）`, session.email);
+      const localOnly = !shouldUseAiFallback(attempt, settings.localCaptchaRetries);
+      onProgress(
+        "captcha_ocr",
+        `本地 OCR 识别图片验证码（本地优先 ${Math.min(attempt, settings.localCaptchaRetries)}/${settings.localCaptchaRetries}，总计 ${attempt}/${settings.captchaRetries}）`,
+        session.email,
+      );
+      const localCandidates = await solveCaptchaLocally(session.captchaImage, signal);
       const localResult = await this.#tryCaptchaCandidates(
         session,
-        await solveCaptchaLocally(session.captchaImage, signal),
+        localCandidates,
         settings.otpTimeout,
         signal,
         onProgress,
       );
       if (localResult) return localResult;
 
-      onProgress("captcha_ai", "本地 OCR 未通过，使用 OpenAI-compatible 视觉模型兜底", session.email);
-      const aiResult = await this.#tryCaptchaCandidates(
-        session,
-        captchaCandidates([await solveCaptchaWithAi(session.captchaImage, captchaConfig, signal)]),
-        settings.otpTimeout,
-        signal,
-        onProgress,
-      );
-      if (aiResult) return aiResult;
+      if (!localOnly) {
+        onProgress("captcha_ai", "多轮本地 OCR 未通过，使用 OpenAI-compatible 视觉模型兜底", session.email);
+        const aiResult = await this.#tryCaptchaCandidates(
+          session,
+          captchaCandidates([await solveCaptchaWithAi(session.captchaImage, captchaConfig, signal)]),
+          settings.otpTimeout,
+          signal,
+          onProgress,
+        );
+        if (aiResult) return aiResult;
+      }
 
       await this.#refreshCaptcha(session, signal);
-      onProgress("captcha", "验证码候选均不匹配，已刷新图片", session.email);
+      onProgress("captcha", localOnly ? "本地 OCR 候选未通过，已刷新图片继续本地识别" : "验证码候选均不匹配，已刷新图片", session.email);
     }
     throw new ApiError(422, "captcha_retry_exhausted", "image captcha retries exhausted");
   }
@@ -457,6 +475,10 @@ export class RegistrationService {
       concurrency: Math.min(clamp(input.concurrent, 1, 20, config.concurrent), maximumConcurrency(), this.config.snapshot().proxy_pool.enabled ? 1 : Number.MAX_SAFE_INTEGER),
       intervalSeconds: Math.max(2, clamp(input.concurrent_interval, 0, 300, config.concurrent_interval)),
       captchaRetries: clamp(input.captcha_retries, 1, 30, config.captcha_retries),
+      localCaptchaRetries: Math.min(
+        clamp(input.local_captcha_retries, 1, 30, config.local_captcha_retries),
+        clamp(input.captcha_retries, 1, 30, config.captcha_retries),
+      ),
       otpTimeout: clamp(input.otp_timeout, 30, 600, config.otp_timeout),
     };
   }
@@ -514,6 +536,7 @@ interface Settings {
   concurrency: number;
   intervalSeconds: number;
   captchaRetries: number;
+  localCaptchaRetries: number;
   otpTimeout: number;
 }
 

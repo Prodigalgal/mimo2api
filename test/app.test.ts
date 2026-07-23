@@ -34,6 +34,9 @@ describe("Fastify application", () => {
         headers: { authorization: `Basic ${Buffer.from("admin:admin-test").toString("base64")}` },
       });
       expect(admin.payload).toContain('data-lucide="eye"');
+      expect(admin.payload).toContain('id="regLocalCaptchaRetries"');
+      expect(admin.payload).toContain("['running','stopping']");
+      expect(admin.payload).toContain("body:'{}'");
       expect((await app.inject({ method: "GET", url: "/vendor/lucide/lucide.min.js" })).statusCode).toBe(200);
     } finally {
       await app.close();

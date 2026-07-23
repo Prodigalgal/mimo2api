@@ -7,7 +7,9 @@
     "api_base": "https://apimail.example.com",
     "admin_password": "YOUR_ADMIN_PASSWORD",
     "domain": "",
-    "site_password": ""
+    "site_password": "",
+    "captcha_retries": 10,
+    "local_captcha_retries": 3
   },
   "proxy_pool": {
     "enabled": false,
