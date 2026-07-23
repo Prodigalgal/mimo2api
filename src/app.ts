@@ -10,6 +10,7 @@ import { ApiError, asApiError } from "./core/errors.js";
 import { ModelService } from "./models/service.js";
 import { CompletionService } from "./protocol/completion.js";
 import { ProxyPool } from "./proxy/pool.js";
+import { RegistrationService } from "./registration/service.js";
 import { ResponseRepository } from "./responses/repository.js";
 import { ResponsesService } from "./responses/service.js";
 import { adminRoutes } from "./routes/admin.js";
@@ -34,6 +35,7 @@ export async function buildApp(options: BuildOptions = {}): Promise<FastifyInsta
   const models = new ModelService(config);
   const renewals = new RenewalScheduler(config);
   const proxy = new ProxyPool(config.snapshot().proxy_pool);
+  const registrations = new RegistrationService(config, proxy);
   const app = Fastify({
     logger: options.logger ?? process.env.NODE_ENV !== "test",
     requestTimeout: 0,
@@ -44,6 +46,13 @@ export async function buildApp(options: BuildOptions = {}): Promise<FastifyInsta
   await app.register(staticPlugin, {
     root: path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../web"),
     decorateReply: true,
+    wildcard: false,
+    index: false,
+  });
+  await app.register(staticPlugin, {
+    root: path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../node_modules/lucide/dist/umd"),
+    prefix: "/vendor/lucide/",
+    decorateReply: false,
     wildcard: false,
     index: false,
   });
@@ -72,11 +81,12 @@ export async function buildApp(options: BuildOptions = {}): Promise<FastifyInsta
   await app.register(modelRoutes(config, models));
   await app.register(chatRoutes(config, completion));
   await app.register(responseRoutes(config, responses));
-  await app.register(adminRoutes(config, { renewals, proxy, responses: responseRepository, usage }));
+  await app.register(adminRoutes(config, { renewals, proxy, registrations, responses: responseRepository, usage }));
 
   app.addHook("onClose", async () => {
     await renewals.stop();
     await responses.stop();
+    registrations.stop();
     proxy.stop();
     config.database.close();
   });

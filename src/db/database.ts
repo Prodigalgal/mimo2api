@@ -141,7 +141,7 @@ export class AppDatabase {
         INSERT INTO settings(key, value_json, updated_at) VALUES (?, ?, ?)
         ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json, updated_at = excluded.updated_at
       `);
-      for (const key of ["api_keys", "admin_password", "models", "tools_passthrough"] as const) {
+      for (const key of ["api_keys", "admin_password", "models", "tools_passthrough", "captcha_ai"] as const) {
         setting.run(key, JSON.stringify(config[key]), now);
       }
       this.connection.prepare(`

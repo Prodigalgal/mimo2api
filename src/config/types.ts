@@ -50,6 +50,14 @@ export const ProxyPoolSchema = z.object({
   fetch_sub_each_time: booleanish.default(true),
 }).passthrough();
 
+export const CaptchaAiSchema = z.object({
+  enabled: booleanish.default(false),
+  api_base: z.string().default(""),
+  api_key: z.string().default(""),
+  model: z.string().default(""),
+  timeout: z.coerce.number().int().min(15).max(180).default(60),
+}).passthrough();
+
 export const AppConfigSchema = z.object({
   api_keys: z.string().default("sk-mimo"),
   admin_password: z.string().default("admin"),
@@ -58,9 +66,11 @@ export const AppConfigSchema = z.object({
   mimo_accounts: z.array(MimoAccountSchema).default([]),
   temp_mail: TempMailSchema.prefault({}),
   proxy_pool: ProxyPoolSchema.prefault({}),
+  captcha_ai: CaptchaAiSchema.prefault({}),
 }).passthrough();
 
 export type MimoAccount = z.infer<typeof MimoAccountSchema>;
 export type TempMailConfig = z.infer<typeof TempMailSchema>;
 export type ProxyPoolConfig = z.infer<typeof ProxyPoolSchema>;
+export type CaptchaAiConfig = z.infer<typeof CaptchaAiSchema>;
 export type AppConfig = z.infer<typeof AppConfigSchema>;

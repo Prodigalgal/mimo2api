@@ -90,6 +90,15 @@ export class ProxyPool {
     return { ok: response.ok, proxy_url: proxyUrl, egress: (await response.text()).slice(0, 200), ...this.status() };
   }
 
+  async prepareForRegistration(signal: AbortSignal): Promise<string | undefined> {
+    if (!this.config.enabled) return undefined;
+    if (this.config.fetch_sub_each_time || this.#nodes.length === 0) await this.refresh(signal);
+    if (this.#nodes.length === 0) throw new ApiError(502, "proxy_registration_unavailable", "proxy pool has no usable nodes");
+    this.#selected = Math.floor(Math.random() * this.#nodes.length);
+    await this.start(signal);
+    return `http://127.0.0.1:${this.config.listen_port}`;
+  }
+
   status(): Record<string, any> {
     const running = Boolean(this.#process && this.#process.exitCode === null);
     return {

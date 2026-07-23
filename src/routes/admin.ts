@@ -5,6 +5,7 @@ import { requireAdmin } from "../core/auth.js";
 import { ApiError } from "../core/errors.js";
 import { MimoClient } from "../mimo/client.js";
 import type { ProxyPool } from "../proxy/pool.js";
+import type { RegistrationService, RegistrationRequest } from "../registration/service.js";
 import type { ResponseRepository } from "../responses/repository.js";
 import type { RenewalScheduler } from "../accounts/renewal-scheduler.js";
 import { TempMailClient } from "../tempmail/client.js";
@@ -13,6 +14,7 @@ import type { UsageRepository } from "../usage/repository.js";
 interface AdminServices {
   renewals: RenewalScheduler;
   proxy: ProxyPool;
+  registrations: RegistrationService;
   responses: ResponseRepository;
   usage: UsageRepository;
 }
@@ -76,6 +78,27 @@ export const adminRoutes = (config: ConfigStore, services: AdminServices): Fasti
     await config.replaceAccounts(accounts);
     return { ok: true, account: config.publicView().mimo_accounts.at(-1) };
   });
+
+  app.get("/api/registration/status", async () => ({ ok: true, ...services.registrations.status() }));
+  app.post("/api/account/auto-register", async (request) => (
+    services.registrations.begin((request.body ?? {}) as RegistrationRequest, requestController(request).signal)
+  ));
+  app.post("/api/account/auto-register/captcha", async (request) => (
+    services.registrations.submit((request.body ?? {}) as RegistrationRequest, requestController(request).signal)
+  ));
+  app.post<{ Params: { sessionId: string } }>("/api/account/auto-register/:sessionId/refresh-captcha", async (request) => (
+    services.registrations.refresh(request.params.sessionId, requestController(request).signal)
+  ));
+  app.post("/api/account/auto-register-batch", async (request) => (
+    services.registrations.startBatch((request.body ?? {}) as RegistrationRequest)
+  ));
+  app.get("/api/account/auto-register-batch", async () => services.registrations.listJobs());
+  app.get<{ Params: { jobId: string } }>("/api/account/auto-register-batch/:jobId", async (request) => (
+    services.registrations.job(request.params.jobId)
+  ));
+  app.post<{ Params: { jobId: string } }>("/api/account/auto-register-batch/:jobId/stop", async (request) => (
+    services.registrations.stopJob(request.params.jobId)
+  ));
 
   app.get("/api/temp-mail/config", async () => ({ ok: true, temp_mail: config.snapshot().temp_mail }));
   app.post("/api/temp-mail/config", async (request) => {
@@ -150,5 +173,6 @@ const preserveMaskedSecrets = (current: AppConfig, patch: Partial<AppConfig>): P
   if (copy.temp_mail?.admin_password?.includes("***")) copy.temp_mail.admin_password = current.temp_mail.admin_password;
   if (copy.temp_mail?.site_password?.includes("***")) copy.temp_mail.site_password = current.temp_mail.site_password;
   if (copy.proxy_pool?.sub_url?.includes("***")) copy.proxy_pool.sub_url = current.proxy_pool.sub_url;
+  if (copy.captcha_ai?.api_key?.includes("***")) copy.captcha_ai.api_key = current.captcha_ai.api_key;
   return copy;
 };

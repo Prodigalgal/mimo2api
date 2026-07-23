@@ -65,6 +65,7 @@ export class ConfigStore {
       ...patch,
       temp_mail: { ...this.#config.temp_mail, ...(patch.temp_mail ?? {}) },
       proxy_pool: { ...this.#config.proxy_pool, ...(patch.proxy_pool ?? {}) },
+      captcha_ai: { ...this.#config.captcha_ai, ...(patch.captcha_ai ?? {}) },
     });
     this.database.writeConfig(this.#config);
     return this.snapshot();
@@ -113,6 +114,14 @@ export class ConfigStore {
           process.env.MIMO2API_PROXY_FETCH_SUB_EACH_TIME,
           config.proxy_pool.fetch_sub_each_time,
         ),
+      },
+      captcha_ai: {
+        ...config.captcha_ai,
+        enabled: envBoolean(process.env.MIMO2API_CAPTCHA_AI_ENABLED, config.captcha_ai.enabled),
+        api_base: envOverride(process.env.MIMO2API_CAPTCHA_AI_API_BASE, config.captcha_ai.api_base),
+        api_key: envOverride(process.env.MIMO2API_CAPTCHA_AI_API_KEY, config.captcha_ai.api_key),
+        model: envOverride(process.env.MIMO2API_CAPTCHA_AI_MODEL, config.captcha_ai.model),
+        timeout: envOverride(process.env.MIMO2API_CAPTCHA_AI_TIMEOUT, config.captcha_ai.timeout),
       },
     });
   }
