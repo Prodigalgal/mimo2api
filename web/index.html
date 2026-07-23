@@ -46,7 +46,7 @@
   <script>
     let config={}, activeJobId='', registrationTimer=0;
     const $=id=>document.getElementById(id);
-    const api=async(url,opt={})=>{const r=await fetch(url,{...opt,headers:{'Content-Type':'application/json',...(opt.headers||{})}});const j=await r.json().catch(()=>({}));if(!r.ok)throw new Error(j.error?.message||j.detail||j.message||r.statusText);return j};
+    const api=async(url,opt={})=>{const headers={...(opt.headers||{})};if(opt.body!==undefined&&!Object.keys(headers).some(k=>k.toLowerCase()==='content-type'))headers['Content-Type']='application/json';const r=await fetch(url,{...opt,headers});const j=await r.json().catch(()=>({}));if(!r.ok)throw new Error(j.error?.message||j.detail||j.message||r.statusText);return j};
     const toast=(m,bad=false)=>{const e=$('toast');e.textContent=m;e.style.background=bad?'#b42318':'#17211b';e.style.display='block';setTimeout(()=>e.style.display='none',3800)};const esc=v=>String(v??'').replace(/[&<>'"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));
     const refreshIcons=()=>window.lucide&&window.lucide.createIcons({attrs:{'stroke-width':1.8}});
     document.querySelectorAll('nav button').forEach(b=>b.onclick=()=>{document.querySelectorAll('nav button,section').forEach(e=>e.classList.remove('active'));b.classList.add('active');$(b.dataset.tab).classList.add('active')});

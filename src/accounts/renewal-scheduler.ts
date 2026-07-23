@@ -51,7 +51,7 @@ export class RenewalScheduler {
     const signal = AbortSignal.timeout(this.leaseMs);
     const lease = await this.requests.acquire(account, signal);
     try {
-      const renewed = await this.renewer.renew(account, signal);
+      const renewed = await this.renewer.renew(account, signal, this.config.snapshot().temp_mail);
       accounts[index] = await this.validator.validate(renewed, signal);
       await this.config.replaceAccounts(accounts);
       return { ok: true, user_id: accounts[index]?.user_id, last_renew: accounts[index]?.last_renew };
@@ -96,7 +96,7 @@ export class RenewalScheduler {
       let lease: AccountLease | undefined;
       try {
         lease = await this.requests.acquire(claimed.account, signal);
-        const renewed = await this.renewer.renew(claimed.account, signal);
+        const renewed = await this.renewer.renew(claimed.account, signal, this.config.snapshot().temp_mail);
         const validated = await this.validator.validate(renewed, signal);
         this.config.database.completeRenewal(claimed.key, validated, Date.now() + jitter(this.intervalMs, 0.2));
       } catch (error) {

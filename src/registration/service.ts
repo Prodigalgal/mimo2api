@@ -426,7 +426,7 @@ export class RegistrationService {
         mail_jwt: session.mailJwt,
         region: session.region,
         auto_renew: true,
-      }), signal);
+      }), signal, this.config.snapshot().temp_mail);
       const checked = await this.validator.validate(account, signal);
       const saved = await this.saveAccount(checked);
       return { ok: true, registered: true, saved: !saved.duplicate, duplicate: saved.duplicate, email: checked.email, user_id: checked.user_id, region: checked.region };
