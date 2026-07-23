@@ -31,6 +31,8 @@ export interface ResponseBody extends Record<string, any> {
   background?: boolean;
   store?: boolean;
   previous_response_id?: string;
+  _mimo_session_id?: string;
+  _mimo_session_tenant?: string;
 }
 
 export interface PreparedResponse {
@@ -40,6 +42,7 @@ export interface PreparedResponse {
   resolved: Array<Record<string, any>>;
   completion: CompletionRequest;
   base: Record<string, any>;
+  sessionId: string;
 }
 
 export class ResponsesService {
@@ -58,10 +61,12 @@ export class ResponsesService {
   prepare(body: ResponseBody, id = responseId()): PreparedResponse {
     const input = canonicalInput(body.input);
     let previousContext: Array<Record<string, any>> = [];
+    let inheritedSessionId = "";
     if (body.previous_response_id) {
       const previous = this.repository.get(body.previous_response_id);
       if (!previous) throw new ApiError(404, "previous_response_not_found", `response ${body.previous_response_id} not found`);
       previousContext = previous.context;
+      inheritedSessionId = previous.sessionId;
     }
     const resolved = [...previousContext, ...expandCompactions(input, this.codec)];
     if (resolved.length === 0) throw new ApiError(400, "missing_input", "input is required", "input");
@@ -73,8 +78,10 @@ export class ResponsesService {
       tools: body.tools,
       toolChoice: body.tool_choice,
       reasoningEffort: body.reasoning?.effort,
+      sessionId: inheritedSessionId || body._mimo_session_id || id,
+      sessionTenant: body._mimo_session_tenant,
     };
-    return { id, body, input, resolved, completion, base: this.base(id, body, "in_progress") };
+    return { id, body, input, resolved, completion, base: this.base(id, body, "in_progress"), sessionId: completion.sessionId! };
   }
 
   events(prepared: PreparedResponse, signal: AbortSignal): AsyncGenerator<SemanticEvent> {
@@ -106,7 +113,7 @@ export class ResponsesService {
       usage: responseUsage(result.usage),
     };
     if (prepared.body.store !== false) {
-      this.repository.save({ response, input: prepared.input, context: [...prepared.resolved, ...output] });
+      this.repository.save({ response, input: prepared.input, context: [...prepared.resolved, ...output], sessionId: prepared.sessionId });
     }
     return response;
   }
@@ -117,6 +124,7 @@ export class ResponsesService {
       response,
       input: prepared.input,
       context: [...prepared.resolved, ...contextOutput],
+      sessionId: prepared.sessionId,
     });
   }
 

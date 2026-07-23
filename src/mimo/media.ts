@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { lookup as mimeLookup } from "mime-types";
 import { fetch } from "undici";
 import { ApiError } from "../core/errors.js";
@@ -78,7 +78,6 @@ async function uploadResource(
     headers: client.headers(),
     body: JSON.stringify({
       fileName: source.filename,
-      fileContentMd5: createHash("md5").update(source.bytes).digest("hex"),
     }),
     signal,
   });

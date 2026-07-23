@@ -13,9 +13,14 @@ export const prepareMessages = (
   messages: ProtocolMessage[],
   toolDefinitions: ToolDefinition[] | undefined,
   passthrough: boolean,
+  cachedQuery?: string,
 ): PreparedMessages => {
   const tools = normalizeTools(toolDefinitions);
   const media: MediaSource[] = [];
+  if (cachedQuery) {
+    for (const message of messages) contentText(message.content, media);
+    return { query: cachedQuery, media, tools };
+  }
   const system: string[] = [];
   const conversation: string[] = [];
 

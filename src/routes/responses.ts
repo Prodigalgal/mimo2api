@@ -1,7 +1,7 @@
 import type { FastifyPluginAsync, FastifyRequest } from "fastify";
 import { z } from "zod";
 import type { ConfigStore } from "../config/store.js";
-import { requireApiKey } from "../core/auth.js";
+import { apiKeyFingerprint, requireApiKey } from "../core/auth.js";
 import { ApiError } from "../core/errors.js";
 import { SseSession } from "../streaming/sse-session.js";
 import { ResponsesStream } from "../responses/stream.js";
@@ -25,7 +25,7 @@ export const responseRoutes = (config: ConfigStore, service: ResponsesService): 
   app.addHook("preHandler", requireApiKey(config));
 
   app.post("/v1/responses", async (request, reply) => {
-    const body = parseBody(request.body);
+    const body = withSession(parseBody(request.body), request);
     if (body.background && body.stream) {
       throw new ApiError(400, "invalid_background_stream", "background responses cannot use stream=true");
     }
@@ -47,27 +47,31 @@ export const responseRoutes = (config: ConfigStore, service: ResponsesService): 
 
   app.post("/v1/responses/input_tokens", async (request) => ({
     object: "response.input_tokens",
-    input_tokens: service.countTokens(parseBody(request.body)),
+    input_tokens: service.countTokens(withSession(parseBody(request.body), request)),
   }));
 
   app.post("/v1/responses/compact", async (request) => (
-    service.compact(parseBody(request.body), requestController(request).signal)
+    service.compact(withSession(parseBody(request.body), request), requestController(request).signal)
   ));
 
   app.post<{ Params: { responseId: string } }>("/v1/responses/:responseId/compact", async (request) => {
     const stored = service.get(request.params.responseId);
     if (!stored) throw new ApiError(404, "response_not_found", `response ${request.params.responseId} not found`);
-    const body = parseBody(request.body ?? {});
-    return service.compact({ ...body, input: stored.context, previous_response_id: undefined }, requestController(request).signal);
+    const body = withSession(parseBody(request.body ?? {}), request);
+    return service.compact({ ...body, input: stored.context, previous_response_id: undefined, _mimo_session_id: stored.sessionId }, requestController(request).signal);
   });
 
   app.post<{ Params: { responseId: string } }>("/v1/responses/:responseId/cancel", async (request) => (
     service.cancel(request.params.responseId)
   ));
 
-  app.get<{ Params: { responseId: string } }>("/v1/responses/:responseId", async (request) => {
+  app.get<{ Params: { responseId: string } }>("/v1/responses/:responseId", async (request, reply) => {
     const stored = service.get(request.params.responseId);
     if (!stored) throw new ApiError(404, "response_not_found", `response ${request.params.responseId} not found`);
+    if (["queued", "in_progress"].includes(String(stored.response.status))) {
+      reply.header("Retry-After", "1");
+      return { ...stored.response, poll_after_ms: 1_000 };
+    }
     return stored.response;
   });
 
@@ -105,6 +109,13 @@ const parseBody = (value: unknown): ResponseBody => {
   const parsed = ResponseSchema.safeParse(value);
   if (!parsed.success) throw new ApiError(400, "invalid_request", z.prettifyError(parsed.error));
   return parsed.data;
+};
+
+const withSession = (body: ResponseBody, request: FastifyRequest): ResponseBody => {
+  const header = request.headers["x-mimo-session-id"];
+  const candidate = (Array.isArray(header) ? header[0] : header) ?? body.session_id ?? body.conversation_id ?? body.user;
+  const sessionId = typeof candidate === "string" && candidate.trim() ? candidate.trim().slice(0, 256) : undefined;
+  return { ...body, _mimo_session_id: sessionId, _mimo_session_tenant: apiKeyFingerprint(request) };
 };
 
 const requestController = (request: FastifyRequest): AbortController => {

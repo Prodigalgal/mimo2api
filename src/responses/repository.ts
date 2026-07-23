@@ -4,6 +4,7 @@ export interface StoredResponse {
   response: Record<string, any>;
   input: Array<Record<string, any>>;
   context: Array<Record<string, any>>;
+  sessionId: string;
 }
 
 export class ResponseRepository {
@@ -13,12 +14,13 @@ export class ResponseRepository {
     const now = Date.now();
     this.database.connection.prepare(`
       INSERT INTO responses(
-        id, status, background, response_json, input_json, context_json,
+        id, status, background, session_id, response_json, input_json, context_json,
         created_at, updated_at, expires_at
-      ) VALUES (@id, @status, @background, @response, @input, @context, @created, @updated, @expires)
+      ) VALUES (@id, @status, @background, @sessionId, @response, @input, @context, @created, @updated, @expires)
       ON CONFLICT(id) DO UPDATE SET
         status = excluded.status,
         background = excluded.background,
+        session_id = excluded.session_id,
         response_json = excluded.response_json,
         input_json = excluded.input_json,
         context_json = excluded.context_json,
@@ -28,6 +30,7 @@ export class ResponseRepository {
       id: record.response.id,
       status: record.response.status,
       background: record.response.background ? 1 : 0,
+      sessionId: record.sessionId,
       response: JSON.stringify(record.response),
       input: JSON.stringify(record.input),
       context: JSON.stringify(record.context),
@@ -39,14 +42,15 @@ export class ResponseRepository {
 
   get(id: string): StoredResponse | undefined {
     const row = this.database.connection.prepare(`
-      SELECT response_json, input_json, context_json FROM responses
+      SELECT response_json, input_json, context_json, session_id FROM responses
       WHERE id = ? AND (expires_at IS NULL OR expires_at > ?)
-    `).get(id, Date.now()) as { response_json: string; input_json: string; context_json: string } | undefined;
+    `).get(id, Date.now()) as { response_json: string; input_json: string; context_json: string; session_id: string } | undefined;
     if (!row) return undefined;
     return {
       response: JSON.parse(row.response_json),
       input: JSON.parse(row.input_json),
       context: JSON.parse(row.context_json),
+      sessionId: row.session_id,
     };
   }
 

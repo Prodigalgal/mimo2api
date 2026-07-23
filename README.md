@@ -10,6 +10,8 @@ MiMo2API 将小米 MiMo AI Studio 转换为 OpenAI-compatible API。当前版本
 - 工具调用：注入完整 JSON Schema，并在返回前使用 JSON Schema 校验参数
 - SQLite：账号、配置、Responses 状态、usage 和保活队列统一持久化
 - 账号保活：SQLite 租约、初始分散、低并发 worker、成功周期抖动、失败指数退避
+- 会话：`X-MiMo-Session-Id` / `session_id` / `user` 驱动的 SQLite 粘性路由，同一会话固定账号和 MiMo `conversationId`
+- 上下文：会话查询缓存带 TTL；累计 prompt tokens 达阈值后自动压缩上下文并轮换上游会话
 - 管理接口：账号、temp-mail、VLESS/sing-box 代理、用量、运行状态
 
 不再提供 Anthropic、TTS、ASR、语音克隆、批处理和自动注册接口。
@@ -57,6 +59,8 @@ curl http://localhost:8080/v1/chat/completions \
 
 流式响应会立即发送 SSE comment，并每 10 秒发送 heartbeat。客户端断开后上游请求会取消；写入遵守 Node stream 背压。若设置 `stream_options.include_usage=true`，`[DONE]` 前会返回 `choices: []` 的 usage chunk。
 
+连续 Chat 请求可传 `X-MiMo-Session-Id: <stable-id>`，或在请求体传 `session_id`。Responses 首次请求会自动创建会话；后续使用 `previous_response_id` 时会继承同一账号和上游会话。会话记录按 API Key 隔离，默认 3 天过期。累计输入达到 `MIMO2API_SESSION_COMPACT_THRESHOLD_TOKENS`（默认 `150000`）时，服务先生成压缩上下文，再切换到新的上游会话。
+
 ## Responses
 
 ```bash
@@ -80,6 +84,8 @@ POST   /v1/responses/:id/compact
 ```
 
 Responses 流使用 typed SSE，包括 `response.created`、`response.in_progress`、output item/content part、output text、reasoning summary、function call arguments、`response.completed/failed`，每个事件都有单调递增的 `sequence_number`。usage 位于最终 Response 对象中，不发送 Chat 风格的 `[DONE]`。
+
+后台 Responses 可轮询 `GET /v1/responses/:id`。状态为 `queued` 或 `in_progress` 时响应附带 `Retry-After: 1` 和 `poll_after_ms: 1000`；完成、失败或取消后不再建议继续轮询。
 
 ## 多模态输入
 

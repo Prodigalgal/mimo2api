@@ -38,6 +38,7 @@ describe("Responses API service", () => {
     expect(first.usage.total_tokens).toBe(7);
     const prepared = service.prepare({ input: "second", previous_response_id: first.id });
     expect(prepared.resolved.length).toBeGreaterThan(1);
+    expect(prepared.completion.sessionId).toBe(first.id);
   });
 
   it("emits typed SSE events with monotonic sequence numbers and final usage", async () => {

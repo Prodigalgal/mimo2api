@@ -84,6 +84,7 @@ export class AppDatabase {
         id TEXT PRIMARY KEY,
         status TEXT NOT NULL,
         background INTEGER NOT NULL DEFAULT 0,
+        session_id TEXT NOT NULL DEFAULT '',
         response_json TEXT NOT NULL,
         input_json TEXT NOT NULL,
         context_json TEXT NOT NULL,
@@ -92,6 +93,20 @@ export class AppDatabase {
         expires_at INTEGER
       );
       CREATE INDEX IF NOT EXISTS responses_expires_idx ON responses(expires_at);
+      CREATE TABLE IF NOT EXISTS conversation_sessions (
+        session_key TEXT PRIMARY KEY,
+        account_user_id TEXT NOT NULL,
+        conversation_id TEXT NOT NULL,
+        prompt_tokens INTEGER NOT NULL DEFAULT 0,
+        context_hash TEXT NOT NULL DEFAULT '',
+        context_query TEXT NOT NULL DEFAULT '',
+        messages_json TEXT NOT NULL DEFAULT '[]',
+        summary_text TEXT NOT NULL DEFAULT '',
+        created_at INTEGER NOT NULL,
+        last_used_at INTEGER NOT NULL,
+        expires_at INTEGER NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS conversation_sessions_expiry_idx ON conversation_sessions(expires_at);
       CREATE TABLE IF NOT EXISTS usage_daily (
         day TEXT NOT NULL,
         model TEXT NOT NULL,
@@ -101,6 +116,12 @@ export class AppDatabase {
         PRIMARY KEY(day, model)
       );
     `);
+    this.ensureColumn("responses", "session_id", "TEXT NOT NULL DEFAULT ''");
+  }
+
+  private ensureColumn(table: string, column: string, definition: string): void {
+    const columns = this.connection.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
+    if (!columns.some((item) => item.name === column)) this.connection.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
   }
 
   async importLegacyConfig(file: string): Promise<boolean> {

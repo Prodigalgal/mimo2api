@@ -1,4 +1,4 @@
-import { timingSafeEqual } from "node:crypto";
+import { createHash, timingSafeEqual } from "node:crypto";
 import type { FastifyRequest } from "fastify";
 import type { ConfigStore } from "../config/store.js";
 import { ApiError } from "./errors.js";
@@ -10,11 +10,13 @@ const equal = (left: string, right: string): boolean => {
 };
 
 export const requireApiKey = (config: ConfigStore) => async (request: FastifyRequest): Promise<void> => {
-  const authorization = request.headers.authorization;
-  const xApiKey = request.headers["x-api-key"];
-  const key = authorization?.replace(/^Bearer\s+/i, "") ?? (Array.isArray(xApiKey) ? xApiKey[0] : xApiKey);
+  const key = apiKeyFrom(request);
   if (!config.validateApiKey(key)) throw new ApiError(401, "invalid_api_key", "invalid api key");
 };
+
+export const apiKeyFingerprint = (request: FastifyRequest): string => createHash("sha256")
+  .update(apiKeyFrom(request) ?? "")
+  .digest("hex");
 
 export const requireAdmin = (config: ConfigStore) => async (request: FastifyRequest): Promise<void> => {
   const authorization = request.headers.authorization ?? "";
@@ -31,4 +33,10 @@ export const requireAdmin = (config: ConfigStore) => async (request: FastifyRequ
   if (!equal(username, "admin") || !equal(password, config.snapshot().admin_password)) {
     throw new ApiError(401, "invalid_admin_auth", "incorrect username or password");
   }
+};
+
+const apiKeyFrom = (request: FastifyRequest): string | undefined => {
+  const authorization = request.headers.authorization;
+  const xApiKey = request.headers["x-api-key"];
+  return authorization?.replace(/^Bearer\s+/i, "") ?? (Array.isArray(xApiKey) ? xApiKey[0] : xApiKey);
 };

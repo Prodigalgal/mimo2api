@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { FastifyPluginAsync, FastifyRequest } from "fastify";
 import { z } from "zod";
 import type { ConfigStore } from "../config/store.js";
-import { requireApiKey } from "../core/auth.js";
+import { apiKeyFingerprint, requireApiKey } from "../core/auth.js";
 import { ApiError, asApiError } from "../core/errors.js";
 import { CompletionService } from "../protocol/completion.js";
 import type { ProtocolMessage, ToolDefinition, Usage } from "../protocol/types.js";
@@ -22,6 +22,8 @@ const ChatRequestSchema = z.object({
   tools: z.array(z.any()).optional(),
   tool_choice: z.any().optional(),
   reasoning_effort: z.string().optional(),
+  session_id: z.string().min(1).max(256).optional(),
+  conversation_id: z.string().min(1).max(256).optional(),
 }).passthrough();
 
 export const chatRoutes = (config: ConfigStore, service: CompletionService): FastifyPluginAsync => async (app) => {
@@ -39,6 +41,8 @@ export const chatRoutes = (config: ConfigStore, service: CompletionService): Fas
       tools: body.tools as ToolDefinition[] | undefined,
       toolChoice: body.tool_choice,
       reasoningEffort: body.reasoning_effort,
+      sessionId: sessionId(request, body),
+      sessionTenant: apiKeyFingerprint(request),
     };
     const controller = requestController(request);
 
@@ -130,3 +134,9 @@ const chatUsage = (usage: Usage) => ({
   prompt_tokens_details: { cached_tokens: 0 },
   completion_tokens_details: { reasoning_tokens: 0 },
 });
+
+const sessionId = (request: FastifyRequest, body: Record<string, unknown>): string | undefined => {
+  const header = request.headers["x-mimo-session-id"];
+  const candidate = (Array.isArray(header) ? header[0] : header) ?? body.session_id ?? body.conversation_id ?? body.user;
+  return typeof candidate === "string" && candidate.trim() ? candidate.trim().slice(0, 256) : undefined;
+};

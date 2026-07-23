@@ -59,6 +59,13 @@ export class ConfigStore {
     return structuredClone(account);
   }
 
+  accountByUserId(userId: string): MimoAccount | undefined {
+    const account = this.#config.mimo_accounts.find((item) => (
+      item.user_id === userId && item.is_valid && item.service_token && item.xiaomichatbot_ph
+    ));
+    return account ? structuredClone(account) : undefined;
+  }
+
   async update(patch: Partial<AppConfig>): Promise<AppConfig> {
     this.#config = AppConfigSchema.parse({
       ...this.#config,
