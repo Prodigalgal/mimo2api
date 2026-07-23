@@ -53,10 +53,14 @@ export class RenewalScheduler {
     try {
       const renewed = await this.renewer.renew(account, signal, this.config.snapshot().temp_mail);
       accounts[index] = await this.validator.validate(renewed, signal);
-      await this.config.replaceAccounts(accounts);
+      this.config.database.completeManualRenewal(index, accounts[index]!, Date.now() + jitter(this.intervalMs, 0.2));
+      this.config.refreshFromDatabase();
       return { ok: true, user_id: accounts[index]?.user_id, last_renew: accounts[index]?.last_renew };
     } catch (error) {
-      return { ok: false, error: asApiError(error).message };
+      const message = asApiError(error).message;
+      this.config.database.recordManualRenewalFailure(index, message);
+      this.config.refreshFromDatabase();
+      return { ok: false, error: message };
     } finally {
       lease.release();
     }
@@ -70,11 +74,13 @@ export class RenewalScheduler {
     const lease = await this.requests.acquire(account, signal);
     try {
       accounts[index] = await this.validator.validate(account, signal);
-      await this.config.replaceAccounts(accounts);
+      this.config.database.updateAccountValidation(index, accounts[index]!);
+      this.config.refreshFromDatabase();
       return { ok: true, user_id: accounts[index]?.user_id, last_test: accounts[index]?.last_test };
     } catch (error) {
       accounts[index] = { ...account, is_valid: false, last_test: new Date().toISOString(), renew_error: asApiError(error).message };
-      await this.config.replaceAccounts(accounts);
+      this.config.database.updateAccountValidation(index, accounts[index]!);
+      this.config.refreshFromDatabase();
       return { ok: false, error: asApiError(error).message };
     } finally {
       lease.release();

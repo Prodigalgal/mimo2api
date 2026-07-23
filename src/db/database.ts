@@ -245,6 +245,35 @@ export class AppDatabase {
     })();
   }
 
+  completeManualRenewal(position: number, account: MimoAccount, nextRenewAt: number): void {
+    this.connection.transaction(() => {
+      const row = this.connection.prepare("SELECT renew_key FROM accounts WHERE position = ?").get(position) as { renew_key: string } | undefined;
+      if (!row) throw new Error("account not found");
+      this.connection.prepare(`
+        UPDATE accounts SET
+          service_token = @service_token, user_id = @user_id, xiaomichatbot_ph = @xiaomichatbot_ph,
+          pass_token = @pass_token, c_user_id = @c_user_id, device_id = @device_id,
+          last_renew = @last_renew, last_test = @last_test, renew_error = '', is_valid = 1
+        WHERE position = @position
+      `).run({ ...account, position });
+      this.connection.prepare(`
+        UPDATE account_renewals SET next_renew_at = ?, lease_until = 0, attempts = 0,
+          last_error = '', updated_at = ? WHERE account_key = ?
+      `).run(nextRenewAt, Date.now(), row.renew_key);
+    })();
+  }
+
+  updateAccountValidation(position: number, account: MimoAccount): void {
+    this.connection.prepare(`
+      UPDATE accounts SET is_valid = ?, last_test = ?, renew_error = ? WHERE position = ?
+    `).run(account.is_valid ? 1 : 0, account.last_test, account.renew_error, position);
+  }
+
+  recordManualRenewalFailure(position: number, error: string): void {
+    this.connection.prepare("UPDATE accounts SET renew_error = ? WHERE position = ?")
+      .run(error.slice(0, 500), position);
+  }
+
   failRenewal(key: string, error: string, nextRenewAt: number): void {
     this.connection.transaction(() => {
       const now = Date.now();

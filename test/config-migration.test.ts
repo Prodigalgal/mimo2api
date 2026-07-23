@@ -58,6 +58,33 @@ describe("legacy config migration", () => {
     expect(duplicate).toBeUndefined();
   });
 
+  it("clears renewal failure metadata after a successful manual renewal", async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), "mimo2api-"));
+    const configFile = path.join(directory, "config.json");
+    const databaseFile = path.join(directory, "mimo.sqlite");
+    await writeFile(configFile, JSON.stringify({
+      mimo_accounts: [{ service_token: "old", user_id: "u", xiaomichatbot_ph: "p", pass_token: "pt" }],
+    }));
+    const store = await ConfigStore.open(configFile, databaseFile);
+    stores.push(store);
+    store.database.enqueueAllRenewals(60_000);
+    const claimed = store.database.claimRenewal(Date.now() + 120_000, 900_000)!;
+    store.database.failRenewal(claimed.key, "exchange failed", Date.now() + 60_000);
+    expect(store.database.renewalStatus().failed).toBe(1);
+
+    store.database.completeManualRenewal(0, {
+      ...claimed.account,
+      service_token: "new",
+      is_valid: true,
+      last_renew: new Date().toISOString(),
+      last_test: new Date().toISOString(),
+    }, Date.now() + 3_600_000);
+    store.refreshFromDatabase();
+
+    expect(store.database.renewalStatus().failed).toBe(0);
+    expect(store.snapshot().mimo_accounts[0]).toMatchObject({ service_token: "new", is_valid: true, renew_error: "" });
+  });
+
   it("does not let empty environment values hide migrated credentials", async () => {
     const directory = await mkdtemp(path.join(os.tmpdir(), "mimo2api-"));
     const configFile = path.join(directory, "config.json");
