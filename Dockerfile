@@ -1,22 +1,14 @@
 # syntax=docker/dockerfile:1.7
 
-FROM node:24-bookworm-slim AS build
+FROM node:24-trixie-slim AS build
 WORKDIR /app
-RUN apt-get update && apt-get install -y --no-install-recommends python3 make g++ \
-    && rm -rf /var/lib/apt/lists/*
 COPY package.json package-lock.json ./
-# better-sqlite3 publishes a newer-GLIBC arm64 prebuild than Bookworm can load.
-# Its normal install intentionally skips node-gyp when a prebuild is present,
-# so force a source build and remove the prebuilds to select build/Release.
-RUN npm ci \
-    && cd node_modules/better-sqlite3 \
-    && node /usr/local/lib/node_modules/npm/node_modules/node-gyp/bin/node-gyp.js rebuild --release --force_build=1 \
-    && rm -rf prebuilds
+RUN npm ci
 COPY tsconfig.json vitest.config.ts ./
 COPY src ./src
 RUN npm run build && npm prune --omit=dev
 
-FROM node:24-bookworm-slim
+FROM node:24-trixie-slim
 ENV NODE_ENV=production \
     PORT=8080 \
     MIMO2API_DATA_DIR=/var/lib/mimo2api \
