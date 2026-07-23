@@ -16,7 +16,29 @@ env:
   IMAGE_TAG: sha-${{ github.sha }}
 
 jobs:
+  quality:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck and test
+        run: npm run check
+
+      - name: Build application
+        run: npm run build
+
   build:
+    needs: quality
     runs-on: ubuntu-latest
     permissions:
       contents: read

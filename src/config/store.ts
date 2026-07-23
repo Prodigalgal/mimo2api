@@ -1,0 +1,123 @@
+import path from "node:path";
+import { AppConfigSchema, type AppConfig, type MimoAccount } from "./types.js";
+import { AppDatabase } from "../db/database.js";
+
+const envBoolean = (value: string | undefined, fallback: boolean): boolean => {
+  if (value === undefined) return fallback;
+  return !["0", "false", "no", "off"].includes(value.trim().toLowerCase());
+};
+
+export class ConfigStore {
+  readonly legacyFile: string;
+  readonly database: AppDatabase;
+  #config: AppConfig = AppConfigSchema.parse({});
+  #accountIndex = 0;
+
+  private constructor(database: AppDatabase, legacyFile: string) {
+    this.database = database;
+    this.legacyFile = path.resolve(legacyFile);
+  }
+
+  static async open(
+    legacyFile = process.env.MIMO2API_CONFIG_FILE ?? "config.json",
+    databaseFile = process.env.MIMO2API_DATABASE_FILE,
+  ): Promise<ConfigStore> {
+    const database = await AppDatabase.open(databaseFile);
+    const store = new ConfigStore(database, legacyFile);
+    await store.load();
+    return store;
+  }
+
+  async load(): Promise<AppConfig> {
+    await this.database.importLegacyConfig(this.legacyFile);
+    this.refreshFromDatabase();
+    return this.snapshot();
+  }
+
+  refreshFromDatabase(): void {
+    this.#config = this.#applyEnvironment(this.database.readConfig());
+  }
+
+  snapshot(): AppConfig {
+    return structuredClone(this.#config);
+  }
+
+  validateApiKey(key: string | undefined): boolean {
+    if (!key) return false;
+    return this.#config.api_keys.split(",").map((item) => item.trim()).includes(key);
+  }
+
+  nextAccount(): MimoAccount | undefined {
+    const accounts = this.#config.mimo_accounts.filter((account) => (
+      account.service_token && account.user_id && account.xiaomichatbot_ph
+    ));
+    if (accounts.length === 0) return undefined;
+    const account = accounts[this.#accountIndex % accounts.length];
+    this.#accountIndex = (this.#accountIndex + 1) % accounts.length;
+    return structuredClone(account);
+  }
+
+  async update(patch: Partial<AppConfig>): Promise<AppConfig> {
+    this.#config = AppConfigSchema.parse({
+      ...this.#config,
+      ...patch,
+      temp_mail: { ...this.#config.temp_mail, ...(patch.temp_mail ?? {}) },
+      proxy_pool: { ...this.#config.proxy_pool, ...(patch.proxy_pool ?? {}) },
+    });
+    this.database.writeConfig(this.#config);
+    return this.snapshot();
+  }
+
+  async replaceAccounts(accounts: MimoAccount[]): Promise<void> {
+    this.#config.mimo_accounts = AppConfigSchema.shape.mimo_accounts.parse(accounts);
+    this.database.replaceAccounts(this.#config.mimo_accounts);
+  }
+
+  publicView(): AppConfig {
+    const config = this.snapshot();
+    config.mimo_accounts = config.mimo_accounts.map((account) => ({
+      ...account,
+      service_token: "",
+      token_masked: mask(account.service_token, 12, 6),
+      password: account.password ? "***" : "",
+      pass_token: mask(account.pass_token, 10, 6),
+      mail_jwt: mask(account.mail_jwt, 10, 6),
+      has_password: Boolean(account.password),
+      has_pass_token: Boolean(account.pass_token),
+      has_mail_jwt: Boolean(account.mail_jwt),
+    }));
+    return config;
+  }
+
+  #applyEnvironment(config: AppConfig): AppConfig {
+    return AppConfigSchema.parse({
+      ...config,
+      api_keys: process.env.MIMO2API_API_KEYS ?? config.api_keys,
+      admin_password: process.env.MIMO2API_ADMIN_PASSWORD ?? config.admin_password,
+      temp_mail: {
+        ...config.temp_mail,
+        api_base: process.env.MIMO2API_TEMP_MAIL_API_BASE ?? config.temp_mail.api_base,
+        admin_password: process.env.MIMO2API_TEMP_MAIL_ADMIN_PASSWORD ?? config.temp_mail.admin_password,
+        site_password: process.env.MIMO2API_TEMP_MAIL_SITE_PASSWORD ?? config.temp_mail.site_password,
+        domain: process.env.MIMO2API_TEMP_MAIL_DOMAIN ?? config.temp_mail.domain,
+      },
+      proxy_pool: {
+        ...config.proxy_pool,
+        enabled: envBoolean(process.env.MIMO2API_PROXY_ENABLED, config.proxy_pool.enabled),
+        sub_url: process.env.MIMO2API_PROXY_SUB_URL ?? config.proxy_pool.sub_url,
+        listen_port: process.env.MIMO2API_PROXY_LISTEN_PORT ?? config.proxy_pool.listen_port,
+        connect_retries: process.env.MIMO2API_PROXY_CONNECT_RETRIES ?? config.proxy_pool.connect_retries,
+        fetch_sub_each_time: envBoolean(
+          process.env.MIMO2API_PROXY_FETCH_SUB_EACH_TIME,
+          config.proxy_pool.fetch_sub_each_time,
+        ),
+      },
+    });
+  }
+}
+
+const mask = (value: string, head: number, tail: number): string => {
+  if (!value) return "";
+  if (value.length <= head + tail) return "***";
+  return `${value.slice(0, head)}...${value.slice(-tail)}`;
+};

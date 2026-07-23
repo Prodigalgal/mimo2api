@@ -1,339 +1,114 @@
 # MiMo2API
 
-[![Python](https://img.shields.io/badge/Python-3.10%2B-blue)](https://www.python.org/)
-[![License](https://img.shields.io/badge/License-MIT-green)](LICENSE)
-[![FastAPI](https://img.shields.io/badge/FastAPI-0.115-teal)](https://fastapi.tiangolo.com/)
+MiMo2API 将小米 MiMo AI Studio 转换为 OpenAI-compatible API。当前版本使用 TypeScript、Node.js、Fastify 和 SQLite，只保留 Chat Completions、Responses、文本/图片/文件输入、工具调用、账号池与必要运维能力。
 
-将**小米 MiMo AI Studio** 网页端能力转换为 **OpenAI / Anthropic 兼容 API**，并支持：
+## 能力
 
-- **Cloudflare 临时邮箱**自动注册小米账号  
-- 图片验证码 **ddddocr 自动识别**  
-- 批量注册（成功目标数 / 并发 / 间隔）  
-- 多账号池、token 保活与 **mail code 自动重登**
+- `POST /v1/chat/completions`：流式/非流式、reasoning、工具调用、`stream_options.include_usage`
+- Responses 协议簇：create、typed SSE、retrieve、cancel、delete、input items、input tokens、compact
+- 图片与文件：支持 data URL/base64 和远程 URL，自动执行 MiMo `genUploadInfo -> PUT -> parse`
+- 工具调用：注入完整 JSON Schema，并在返回前使用 JSON Schema 校验参数
+- SQLite：账号、配置、Responses 状态、usage 和保活队列统一持久化
+- 账号保活：SQLite 租约、初始分散、低并发 worker、成功周期抖动、失败指数退避
+- 管理接口：账号、temp-mail、VLESS/sing-box 代理、用量、运行状态
 
-> 本项目在 [mimo2api](https://github.com/Water008/MiMo2API) 基础上演进，已形成完整的「代理 + 自动注册 + 保活」方案。
+不再提供 Anthropic、TTS、ASR、语音克隆、批处理和自动注册接口。
 
----
+## 启动
 
-## 目录
-
-- [特性](#特性)
-- [架构](#架构)
-- [快速开始](#快速开始)
-- [管理面板](#管理面板)
-- [临时邮箱与自动注册](#临时邮箱与自动注册)
-- [配置说明](#配置说明)
-- [OpenAI 兼容 API](#openai-兼容-api)
-- [账号保活](#账号保活)
-- [项目结构](#项目结构)
-- [依赖](#依赖)
-- [常见问题](#常见问题)
-- [许可](#许可)
-
----
-
-## 特性
-
-| 模块 | 说明 |
-|------|------|
-| OpenAI 兼容 | `/v1/chat/completions`、`/v1/models`、流式 / 非流式 |
-| Anthropic 兼容 | `/v1/messages` 等 |
-| 多模态 | 图片 / 文本文件上传（官方三步流程） |
-| 工具调用 | 多策略提取 + 流式筛分 |
-| TTS / ASR | OpenAI 兼容语音接口 |
-| **临时邮箱** | 对接 [cloudflare_temp_email](https://github.com/dreamhunter2333/cloudflare_temp_email) |
-| **自动注册** | 随机地区（非中国）、随机密码、OCR 过图、自动收信验证 |
-| **批量注册** | 成功目标数即停、并发与间隔；**后台任务 + 详细阶段日志**（内存） |
-| **代理池** | VLESS 订阅 + 本机 **sing-box** 混合入站，注册流量走 SOCKS5 |
-| **保活** | passToken 续期；失效时用 temp-mail 自动取 mail code 重登 |
-| 多账号 | 管理面板导入 / 轮询负载 |
-
-管理界面为**中文**（无国际化切换）。
-
----
-
-## 架构
-
-```
-客户端 (ChatBox / OpenAI SDK / Anthropic)
-        │
-        ▼
-┌──────────────────────────────────────────┐
-│              MiMo2API (FastAPI)            │
-│  /v1/* 代理 · 管理面板 · 自动注册 · 保活   │
-└───────────────┬──────────────────────────┘
-                │
-      ┌─────────┴──────────┐
-      ▼                    ▼
- aistudio.xiaomimimo.com   account.xiaomi.com
- (对话 / token)             (注册 / 登录)
-      │
-      ▼
-  自建 Cloudflare Temp Mail
-  (创建地址 · 收验证码)
-```
-
----
-
-## 快速开始
-
-### 环境要求
-
-- Python 3.10+
-- 已部署的 Cloudflare 临时邮箱后端（admin 可创建地址）
-
-### 安装
+环境要求：Node.js 22 或更高版本。
 
 ```bash
-git clone <your-repo-url> MiMo2API
-cd MiMo2API
-python -m venv venv
-# Windows:
-venv\Scripts\activate
-# Linux/macOS:
-# source venv/bin/activate
-
-pip install -r requirements.txt
-cp config.example.json config.json
-# 编辑 config.json：api_keys、admin_password、temp_mail 等
-python main.py
+npm ci
+npm run check
+npm run build
+npm start
 ```
 
-默认监听：`http://0.0.0.0:8080`  
-管理面板：`http://localhost:8080`（Basic 认证，用户名 `admin`，密码为配置中的 `admin_password`）
+默认地址为 `http://0.0.0.0:8080`。管理页面使用 HTTP Basic，用户名固定为 `admin`，密码来自配置。
 
-### Docker
+## 旧配置迁移
+
+首次启动会读取 `MIMO2API_CONFIG_FILE` 指向的旧 `config.json`，将以下内容导入 SQLite：
+
+- `mimo_accounts`，包括账号对象中的未知扩展字段
+- `proxy_pool.sub_url` 及代理设置
+- `temp_mail.api_base`、管理口令、站点口令和域名
+- API keys、管理密码、模型列表和工具模式
+
+迁移完成后在 SQLite `meta` 表写入 `legacy_config_imported`。原 JSON 不修改，后续在线读写只使用 SQLite。
+
+默认数据库：
+
+```text
+${MIMO2API_DATA_DIR}/mimo2api.sqlite
+```
+
+生产环境应显式设置 `MIMO2API_DATABASE_FILE` 并将所在目录挂载到持久卷。
+
+## Chat Completions
 
 ```bash
-docker run -d -p 8080:8080 -v $(pwd)/config.json:/app/config.json <image>
-```
-
----
-
-## 管理面板
-
-浏览器打开服务根路径，使用管理员账号登录。
-
-| 标签 | 用途 |
-|------|------|
-| cURL / Cookie / 邮箱 | 导入已有 MiMo 会话 |
-| **自动注册** | 注册参数、单次 / 批量注册、OCR |
-| **临时邮箱** | 仅邮箱 API（地址、管理口令、域名） |
-| **代理池** | VLESS 订阅、sing-box 启停/轮换/连通测试 |
-| 账号 | 列表（分页）、测试、续期、删除 |
-| API Key | 对外调用密钥、管理密码 |
-| 用量统计 | 请求量与 token 统计 |
-
-说明：
-
-- **临时邮箱**页只配邮箱服务，不重复放注册参数  
-- **自动注册**页配置并发、成功目标、地区（含 RANDOM）等，可「保存注册参数」
-
----
-
-## 临时邮箱与自动注册
-
-### 1. 配置临时邮箱
-
-在 **临时邮箱** 页填写：
-
-| 字段 | 说明 |
-|------|------|
-| API 地址 | 如 `https://apimail.example.com` |
-| 管理口令 | 对应部署的 `ADMIN_PASSWORDS`，请求头 `x-admin-auth` |
-| 默认域名 | 可选，空则用服务端第一个域名 |
-| 站点密码 | 若启用了 `x-custom-auth` 再填 |
-
-点「测试连接」确认可创建测试邮箱。
-
-### 2. 注册参数（自动注册页）
-
-| 参数 | 说明 |
-|------|------|
-| 注册地区 | 固定国家，或 **RANDOM**（每个账号独立随机，永不 CN） |
-| 成功目标数 | 成功注册到 N 个即停止；`0` = 不提前停 |
-| 最大尝试次数 | 上限 |
-| 并发数 | 同时进行的注册任务数 |
-| 并发间隔 | 启动下一个任务前等待的秒数 |
-| OCR 重试 / 邮件超时 | 图片码与收信等待 |
-| 自动 OCR | 批量注册必须开启 |
-
-### 3. 单次注册
-
-点 **单次注册** → 自动创建邮箱 → OCR 过图 → 收信验证 → 登录拿 token → 写入账号池。
-
-### 4. 批量注册（重要）
-
-点 **批量注册**：
-
-1. 服务端**立即返回** `job_id`（后台执行，避免 Cloudflare/Nginx **504**）  
-2. 前端每 2.5s 轮询 `/api/account/auto-register-batch/{job_id}`  
-3. 达到成功目标或用尽尝试次数后展示结果  
-
-若看到 `Unexpected token '<'`，说明收到了 HTML（常见于旧版同步批量超时 504）。请部署包含「异步批量」的版本。
-
-### 5. 相关 API
-
-```http
-POST /api/temp-mail/config          # 保存邮箱 / 注册参数（merge）
-POST /api/temp-mail/test            # 测试邮箱
-POST /api/account/auto-register     # 单次注册
-POST /api/account/auto-register-batch   # 启动批量（异步）
-GET  /api/account/auto-register-batch/{job_id}  # 查询进度
-```
-
-管理接口均需 HTTP Basic：`admin` + `admin_password`。
-
----
-
-## 配置说明
-
-`config.example.json` 示例：
-
-```json
-{
-  "api_keys": "sk-mimo",
-  "admin_password": "admin",
-  "tools_passthrough": false,
-  "temp_mail": {
-    "api_base": "https://apimail.example.com",
-    "admin_password": "YOUR_ADMIN_PASSWORD",
-    "domain": "",
-    "site_password": "",
-    "register_region": "RANDOM",
-    "batch_count": 5,
-    "success_target": 3,
-    "concurrent": 2,
-    "concurrent_interval": 3.0,
-    "captcha_retries": 10,
-    "otp_timeout": 120,
-    "auto_captcha": true
-  },
-  "mimo_accounts": []
-}
-```
-
-| 字段 | 含义 |
-|------|------|
-| `api_keys` | 调用 `/v1/*` 的 Bearer Key，逗号分隔 |
-| `admin_password` | 管理面板密码 |
-| `temp_mail.*` | 邮箱 + 注册默认参数 |
-| `mimo_accounts` | 已导入/注册的账号（含 `mail_jwt` 时支持自动取码） |
-
-`config.json` 含密钥，请勿提交到 Git。
-
----
-
-## OpenAI 兼容 API
-
-```bash
-# 列模型
-curl http://localhost:8080/v1/models \
-  -H "Authorization: Bearer sk-mimo"
-
-# 对话
 curl http://localhost:8080/v1/chat/completions \
   -H "Authorization: Bearer sk-mimo" \
   -H "Content-Type: application/json" \
-  -d '{"model":"mimo-v2.5-pro","messages":[{"role":"user","content":"你好"}]}'
+  -d '{"model":"mimo-v2.5-pro","stream":true,"messages":[{"role":"user","content":"你好"}]}'
 ```
 
-更多：流式、多模态、工具调用、Anthropic Messages、TTS/ASR 等与上游 MiMo 能力一致，详见 `/docs`（Swagger）。
+流式响应会立即发送 SSE comment，并每 10 秒发送 heartbeat。客户端断开后上游请求会取消；写入遵守 Node stream 背压。若设置 `stream_options.include_usage=true`，`[DONE]` 前会返回 `choices: []` 的 usage chunk。
 
----
+## Responses
 
-## 账号保活（含自动注册账号过期重登）
-
-自动注册成功的账号会写入：`email`、`password`、`pass_token`、`mail_jwt`、`auto_renew=true`。
-
-后台保活顺序：
-
-1. **passToken** 换新 aistudio `serviceToken`（无需邮件）  
-2. passToken 失效时：邮箱+密码登录  
-3. 若小米要求二次验证：自动发码 → **用该账号的 `mail_jwt` 从临时邮箱取最新验证码** → 完成登录并更新 token  
-
-条件：
-
-- 全局「临时邮箱」API 配置可用  
-- 账号带有 `mail_jwt`（自动注册会自动保存）  
-- 账号 `auto_renew` 为 true  
-
-面板操作：
-
-- **续期**：有 temp-mail 标记的账号会自动走取码重登  
-- **测试**：若返回 401/403，会先尝试自动续期再测一次  
-
-环境变量（可选）：
-
-| 变量 | 说明 |
-|------|------|
-| `PORT` | 监听端口，默认 8080 |
-| `MIMO2API_CONFIG_FILE` | 配置文件路径 |
-| `MIMO2API_RENEW_INTERVAL_SECONDS` | 续期间隔，默认 6 小时 |
-
----
-
-## 代理池（VLESS + sing-box）
-
-1. 管理面板 **代理池** 页填写订阅 URL（base64 多行 `vless://`）  
-2. 启用代理 → 保存 → 启动（自动下载/查找 `sing-box` 到 `.bin/`）  
-3. 本地 `127.0.0.1:listen_port` 混合入站；注册请求走 `socks5://127.0.0.1:port`  
-4. 可按「每 N 次注册」轮换节点  
-
-依赖：系统可运行 sing-box；Python 侧需 `socksio`（见 requirements）。
-
-## 项目结构
-
-```
-MiMo2API/
-├── main.py                   # 入口，挂载各 router
-├── app/
-│   ├── routes.py             # OpenAI / 管理 / 导入
-│   ├── register_routes.py    # 临时邮箱 / 自动注册 / 批量 / 续期
-│   ├── proxy_routes.py       # 代理池 API
-│   ├── proxy_pool.py         # VLESS 订阅解析 + sing-box 进程
-│   ├── account_service.py    # 账号落库共用逻辑
-│   ├── xiaomi_login.py       # 密码登录、OTP、passToken
-│   ├── xiaomi_register.py    # 注册 + OCR（可走代理）
-│   ├── temp_mail.py          # 临时邮箱客户端
-│   ├── mimo_client.py        # 上游聊天代理
-│   └── config.py             # 配置
-├── web/index.html
-├── config.example.json
-└── requirements.txt
+```bash
+curl http://localhost:8080/v1/responses \
+  -H "Authorization: Bearer sk-mimo" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"mimo-v2.5-pro","input":"读取当前目录并总结","stream":true}'
 ```
 
----
+支持的端点：
 
-## 依赖
+```text
+POST   /v1/responses
+GET    /v1/responses/:id
+DELETE /v1/responses/:id
+POST   /v1/responses/:id/cancel
+GET    /v1/responses/:id/input_items
+POST   /v1/responses/input_tokens
+POST   /v1/responses/compact
+POST   /v1/responses/:id/compact
+```
 
-见 `requirements.txt`，主要包括：
+Responses 流使用 typed SSE，包括 `response.created`、`response.in_progress`、output item/content part、output text、reasoning summary、function call arguments、`response.completed/failed`，每个事件都有单调递增的 `sequence_number`。usage 位于最终 Response 对象中，不发送 Chat 风格的 `[DONE]`。
 
-- FastAPI / Uvicorn / httpx  
-- pycryptodome（小米注册 AES/RSA）  
-- ddddocr + onnxruntime（图片验证码 OCR）  
+## 多模态输入
 
----
+Chat 使用 `image_url` / `file` content part；Responses 使用 `input_image` / `input_file`。允许：
 
-## 常见问题
+- `data:image/...;base64,...`
+- `file_data` base64
+- HTTPS 图片/文件 URL
 
-**Q: 批量注册报 `Unexpected token '<'`？**  
-A: 旧版同步批量会触发网关 **504 HTML**。请使用当前版本（异步 job + 轮询），并重新部署。
+单文件默认上限为 25 MiB，可用 `MIMO2API_MAX_UPLOAD_BYTES` 调整。音频输入和音频模型会返回 `unsupported_model`。
 
-**Q: 图片验证码过不去？**  
-A: 确认已安装 `ddddocr`；自动 OCR 会多轮重试，失败可手动填码。
+## 保活
 
-**Q: 注册地区？**  
-A: 不要选中国；推荐 `RANDOM`，每个账号从安全国家列表中随机。
+自动保活只使用 `passToken`，不会后台批量发送 OTP 或自动尝试密码登录。调度规则：
 
-**Q: 临时邮箱创建失败？**  
-A: 检查 API 地址、`x-admin-auth` 管理口令，以及部署是否允许 admin 创建地址。
+- 默认并发 `1`
+- 首次启动将账号稳定分散到默认 1 小时时间窗
+- 每次任务持有 SQLite 租约，防止同一账号被重复领取
+- 成功后约 6 小时再次续期，并加入 20% 抖动
+- 失败从 15 分钟开始指数退避，最高不超过正常周期
+- “续期全部”只排队，默认在 15 分钟窗口内分散执行
 
-**Q: 如何导入已有账号？**  
-A: 管理面板 Cookie / cURL / 邮箱密码导入；自动注册成功的账号会直接进入列表。
+关键环境变量见 [deploy.env.example](./deploy.env.example)。
 
----
+## 验证
 
-## 许可
+```bash
+npm run check
+docker build -t mimo2api:local .
+```
 
-MIT
+测试覆盖配置迁移、SQLite 租约、工具参数校验、跨 chunk 流解析、Responses 状态和 typed SSE。

@@ -1,4 +1,11 @@
 config.json
+node_modules/
+dist/
+coverage/
+.playwright-cli/
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
 __pycache__/
 *.pyc
 sessions.json

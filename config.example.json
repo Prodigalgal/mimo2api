@@ -1,23 +1,16 @@
 {
   "api_keys": "sk-mimo",
   "admin_password": "admin",
+  "models": ["mimo-v2.5-pro"],
   "tools_passthrough": false,
   "temp_mail": {
     "api_base": "https://apimail.example.com",
     "admin_password": "YOUR_ADMIN_PASSWORD",
     "domain": "",
-    "site_password": "",
-    "register_region": "RANDOM",
-    "batch_count": 5,
-    "success_target": 3,
-    "concurrent": 2,
-    "concurrent_interval": 3.0,
-    "captcha_retries": 10,
-    "otp_timeout": 120,
-    "auto_captcha": true
+    "site_password": ""
   },
   "proxy_pool": {
-    "enabled": true,
+    "enabled": false,
     "sub_url": "https://proxy.example.com/sub?token=YOUR_TOKEN",
     "listen_port": 17890,
     "singbox_path": "",
@@ -25,13 +18,6 @@
     "refresh_interval": 3600,
     "connect_retries": 5,
     "fetch_sub_each_time": true
-  },
-  "captcha_ai": {
-    "enabled": false,
-    "api_base": "https://sub2api.example.com",
-    "api_key": "sk-xxx",
-    "model": "grok",
-    "timeout": 60
   },
   "mimo_accounts": []
 }
