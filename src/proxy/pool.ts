@@ -221,13 +221,9 @@ const parseVless = (value: string): VlessNode | undefined => {
   try {
     const url = new URL(value);
     const query = url.searchParams;
-    const name = decodeURIComponent(url.hash.slice(1) || `${url.hostname}:${url.port || 443}`);
-    const identity = [
-      decodeURIComponent(url.username), url.hostname, url.port || "443",
-      query.get("security") || "tls", query.get("type") || query.get("network") || "tcp",
-      query.get("host") || "", decodeURIComponent(query.get("path") || "/"),
-      query.get("sni") || query.get("host") || url.hostname, query.get("flow") || "",
-    ].join("|");
+    const label = decodeURIComponent(url.hash.slice(1));
+    const name = label || `${url.hostname}:${url.port || 443}`;
+    const identity = proxyNodeIdentity(url);
     return {
       identity,
       name,
@@ -244,6 +240,18 @@ const parseVless = (value: string): VlessNode | undefined => {
       tag: `vless-${Buffer.from(identity).toString("base64url").slice(0, 30)}`,
     };
   } catch { return undefined; }
+};
+
+export const proxyNodeIdentity = (url: URL): string => {
+  const label = decodeURIComponent(url.hash.slice(1));
+  if (label) return `name:${label}`;
+  const query = url.searchParams;
+  return `connection:${[
+    decodeURIComponent(url.username), url.hostname, url.port || "443",
+    query.get("security") || "tls", query.get("type") || query.get("network") || "tcp",
+    query.get("host") || "", decodeURIComponent(query.get("path") || "/"),
+    query.get("sni") || query.get("host") || url.hostname, query.get("flow") || "",
+  ].join("|")}`;
 };
 
 const singBoxConfig = (node: VlessNode, port: number) => ({
