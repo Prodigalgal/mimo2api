@@ -5,7 +5,9 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends python3 make g++ \
     && rm -rf /var/lib/apt/lists/*
 COPY package.json package-lock.json ./
-RUN npm ci
+# better-sqlite3 publishes a newer-GLIBC arm64 prebuild than Bookworm can load.
+# Rebuild it here so the native binding matches the runtime base image.
+RUN npm ci && npm rebuild better-sqlite3 --build-from-source
 COPY tsconfig.json vitest.config.ts ./
 COPY src ./src
 RUN npm run build && npm prune --omit=dev
