@@ -111,6 +111,10 @@ Chat 使用 `image_url` / `file` content part；Responses 使用 `input_image` /
 
 关键环境变量见 [deploy.env.example](./deploy.env.example)。
 
+## 注册验证码
+
+生产部署使用同 Pod 的 Python `ddddocr` sidecar，本地 OCR 候选全部不匹配后，才调用已配置的 OpenAI-compatible 视觉模型（例如现有 `grok`）兜底。Node 主容器通过 `MIMO2API_CAPTCHA_OCR_URL=http://127.0.0.1:8090` 访问本地服务；OCR 模型及运行时不进入 Node 进程。
+
 ## 验证
 
 ```bash

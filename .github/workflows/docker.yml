@@ -82,6 +82,18 @@ jobs:
           provenance: mode=max
           sbom: true
 
+      - name: Build and publish Python OCR sidecar
+        uses: docker/build-push-action@v6
+        with:
+          context: ./ocr-service
+          platforms: linux/amd64,linux/arm64
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ env.IMAGE_NAME }}:ocr-${{ env.IMAGE_TAG }}
+          cache-from: type=gha,scope=mimo2api-ocr
+          cache-to: type=gha,mode=max,scope=mimo2api-ocr
+          provenance: mode=max
+          sbom: true
+
   update-gitops:
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     needs: build
@@ -112,7 +124,8 @@ jobs:
         run: |
           cd gitops/mimo2api/oracle
           kustomize edit set image \
-            ghcr.io/example/mimo2api=${IMAGE_NAME}:${IMAGE_TAG}
+            ghcr.io/example/mimo2api=${IMAGE_NAME}:${IMAGE_TAG} \
+            ghcr.io/example/mimo2api-ocr=${IMAGE_NAME}:ocr-${IMAGE_TAG}
           kustomize build . >/tmp/mimo2api-rendered.yaml
 
       - name: Commit GitOps revision

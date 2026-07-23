@@ -7,6 +7,7 @@ import { MimoAccountSchema, type CaptchaAiConfig, type MimoAccount } from "../co
 import { ApiError } from "../core/errors.js";
 import type { ProxyPool } from "../proxy/pool.js";
 import { TempMailClient } from "../tempmail/client.js";
+import { captchaCandidates, solveCaptchaLocally } from "./captcha-ocr.js";
 
 const ACCOUNT = "https://account.xiaomi.com";
 const AISTUDIO = "https://aistudio.xiaomimimo.com";
@@ -273,14 +274,50 @@ export class RegistrationService {
     const session = this.session(started.session_id);
     const captchaConfig = this.config.snapshot().captcha_ai;
     for (let attempt = 1; attempt <= settings.captchaRetries; attempt += 1) {
-      onProgress("captcha_ai", `识别图片验证码（${attempt}/${settings.captchaRetries}）`, session.email);
-      const candidate = await solveCaptcha(session.captchaImage, captchaConfig, signal);
-      if (!candidate) throw new ApiError(422, "captcha_ai_empty", "captcha AI did not return a usable image code");
-      const result = await this.submit({ session_id: session.id, captcha: candidate, otp_timeout: settings.otpTimeout }, signal, onProgress) as Record<string, any>;
-      if (!result.need_captcha) return completion(result);
-      onProgress("captcha", "验证码不匹配，已刷新图片", session.email);
+      onProgress("captcha_ocr", `本地 OCR 识别图片验证码（${attempt}/${settings.captchaRetries}）`, session.email);
+      const localResult = await this.#tryCaptchaCandidates(
+        session,
+        await solveCaptchaLocally(session.captchaImage, signal),
+        settings.otpTimeout,
+        signal,
+        onProgress,
+      );
+      if (localResult) return localResult;
+
+      onProgress("captcha_ai", "本地 OCR 未通过，使用 OpenAI-compatible 视觉模型兜底", session.email);
+      const aiResult = await this.#tryCaptchaCandidates(
+        session,
+        captchaCandidates([await solveCaptchaWithAi(session.captchaImage, captchaConfig, signal)]),
+        settings.otpTimeout,
+        signal,
+        onProgress,
+      );
+      if (aiResult) return aiResult;
+
+      await this.#refreshCaptcha(session, signal);
+      onProgress("captcha", "验证码候选均不匹配，已刷新图片", session.email);
     }
     throw new ApiError(422, "captcha_retry_exhausted", "image captcha retries exhausted");
+  }
+
+  async #tryCaptchaCandidates(
+    session: Session,
+    candidates: string[],
+    otpTimeout: number,
+    signal: AbortSignal,
+    onProgress: Progress,
+  ): Promise<Completion | undefined> {
+    for (const candidate of candidates) {
+      const ticket = await this.#sendTicket(session, candidate, signal);
+      const code = numberCode(ticket.code);
+      if (code === 0 || ticket.code === undefined || ticket.code === "0") {
+        session.ticketSent = true;
+        onProgress("mail", "图片验证码通过，等待注册邮件", session.email);
+        return completion(await this.#finish(session, { otp_timeout: otpTimeout }, signal, onProgress));
+      }
+      if (!CAPTCHA_ERRORS.has(code)) throw passportError(ticket, "sending registration email failed");
+    }
+    return undefined;
   }
 
   async #refreshCaptcha(session: Session, signal: AbortSignal): Promise<void> {
@@ -543,7 +580,7 @@ const encryptCredentials = (email: string, password: string): { encrypted: Recor
   return { encrypted, eui: `${wrapped}.${Buffer.from("email,password").toString("base64")}` };
 };
 
-const solveCaptcha = async (dataUrl: string, config: CaptchaAiConfig, signal: AbortSignal): Promise<string> => {
+const solveCaptchaWithAi = async (dataUrl: string, config: CaptchaAiConfig, signal: AbortSignal): Promise<string> => {
   const base = config.api_base.trim().replace(/\/$/, "");
   if (!(config.enabled && base && config.api_key && config.model && dataUrl)) return "";
   const response = await fetch(`${base}/v1/chat/completions`, {
@@ -553,9 +590,9 @@ const solveCaptcha = async (dataUrl: string, config: CaptchaAiConfig, signal: Ab
     body: JSON.stringify({
       model: config.model,
       temperature: 0,
-      max_tokens: 24,
+      max_tokens: 32,
       messages: [{ role: "user", content: [
-        { type: "text", text: "Read this Xiaomi image captcha. Reply only with the captcha characters, without spaces or explanation." },
+        { type: "text", text: "这是小米账号注册用的图片验证码，通常是扭曲的字母或数字。只输出验证码字符，不要空格、引号或解释；若不清晰，请猜测最可能的 3-6 个字符。" },
         { type: "image_url", image_url: { url: dataUrl } },
       ] }],
     }),
